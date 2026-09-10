@@ -28,7 +28,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Boot Android TV 36 and launch Selyro
+      - name: Boot Android TV 36 and verify launcher startup
         uses: ReactiveCircus/android-emulator-runner@v2.38.0
         with:
           api-level: 36
@@ -40,14 +40,30 @@ jobs:
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
+            set -euxo pipefail
             gradle :app:assembleDebug --stacktrace
             adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+            echo 'Verify standard Android launcher intent'
+            adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.selyro.tv | tee /tmp/launcher.txt
+            grep -q 'com.selyro.tv/.MainActivity' /tmp/launcher.txt
+
+            echo 'Verify Android TV leanback launcher intent'
+            adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER com.selyro.tv | tee /tmp/leanback.txt
+            grep -q 'com.selyro.tv/.MainActivity' /tmp/leanback.txt
+
             adb logcat -c
-            adb shell am start -W -n com.selyro.tv/.MainActivity | tee /tmp/start.txt
+            echo 'Launch exactly as Android TV launcher does'
+            adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER -p com.selyro.tv | tee /tmp/start.txt
             grep -q 'Status: ok' /tmp/start.txt
             sleep 6
+
             adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.selyro.tv/.MainActivity'
+
+            adb exec-out screencap -p > /tmp/selyro-tv-startup.png
+            test -s /tmp/selyro-tv-startup.png
+
             if adb logcat -d -v brief '*:E' | grep -E 'FATAL EXCEPTION|Process: com.selyro.tv' ; then
               echo 'Selyro crashed during TV smoke test'
               exit 1
