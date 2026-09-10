@@ -1,5 +1,6 @@
 package com.selyro.tv.ui
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,6 +30,10 @@ import coil3.compose.AsyncImage
 import com.selyro.tv.model.*
 import com.selyro.tv.player.PlaybackManager
 import com.selyro.tv.player.StreamingProfile
+import com.selyro.tv.update.UpdateInfo
+import com.selyro.tv.update.UpdateManager
+import com.selyro.tv.update.UpdateStatus
+import kotlinx.coroutines.launch
 
 private val Bg = Color(0xFF070B10)
 private val Rail = Color(0xFF0D131A)
@@ -51,6 +56,37 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
     val context = LocalContext.current.applicationContext
     var playback by remember { mutableStateOf<PlaybackManager?>(null) }
     var playing by remember { mutableStateOf<PlayRequest?>(null) }
+    var updateStatus by remember { mutableStateOf<UpdateStatus>(UpdateStatus.Idle) }
+    val scope = rememberCoroutineScope()
+
+    fun checkUpdates() {
+        scope.launch {
+            updateStatus = UpdateStatus.Checking
+            updateStatus = UpdateManager.check()
+        }
+    }
+
+    fun beginUpdate(info: UpdateInfo) {
+        if (UpdateManager.needsInstallPermission(context)) {
+            UpdateManager.openInstallPermission(context)
+            updateStatus = UpdateStatus.Error("Allow Selyro TV to install unknown apps, then press UPDATE again.")
+            return
+        }
+        scope.launch {
+            updateStatus = UpdateStatus.Downloading(0)
+            val result = UpdateManager.download(context, info) { percent ->
+                updateStatus = UpdateStatus.Downloading(percent)
+            }
+            result.onSuccess { file ->
+                updateStatus = UpdateStatus.Ready(info, file)
+                UpdateManager.install(context, file)
+            }.onFailure {
+                updateStatus = UpdateStatus.Error(it.message ?: "Update download failed")
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { checkUpdates() }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -71,14 +107,66 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
             } else if (account == null) {
                 LoginScreen(vm)
             } else {
-                MainShell(vm) { request ->
+                MainShell(vm, updateStatus, ::checkUpdates, ::beginUpdate) { request ->
                     vm.markWatched(request.kind, request.id)
                     val manager = playback ?: PlaybackManager(context, profile).also { playback = it }
                     manager.play(request.url, request.title)
                     playing = request
                 }
             }
+
+            UpdateOverlay(
+                status = updateStatus,
+                onCheck = ::checkUpdates,
+                onUpdate = ::beginUpdate,
+                onInstall = { info, file ->
+                    if (UpdateManager.needsInstallPermission(context)) UpdateManager.openInstallPermission(context)
+                    else UpdateManager.install(context, file)
+                },
+                modifier = Modifier.align(Alignment.TopEnd).padding(18.dp)
+            )
         }
+    }
+}
+
+@Composable
+private fun UpdateOverlay(
+    status: UpdateStatus,
+    onCheck: () -> Unit,
+    onUpdate: (UpdateInfo) -> Unit,
+    onInstall: (UpdateInfo, java.io.File) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    when (status) {
+        is UpdateStatus.Available -> Column(
+            modifier.width(360.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF14242B)).border(1.dp, Accent, RoundedCornerShape(14.dp)).padding(14.dp)
+        ) {
+            Text("Update available", color = Accent, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Text("Selyro TV ${status.info.versionName}", color = Color.White, fontSize = 14.sp)
+            if (status.info.notes.isNotBlank()) Text(status.info.notes, color = Muted, fontSize = 12.sp, maxLines = 2)
+            Spacer(Modifier.height(9.dp))
+            TvButton("UPDATE NOW", selected = true, modifier = Modifier.fillMaxWidth()) { onUpdate(status.info) }
+        }
+        is UpdateStatus.Downloading -> Column(
+            modifier.width(300.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF14242B)).padding(14.dp)
+        ) {
+            Text("Downloading update… ${status.percent}%", color = Color.White, fontSize = 14.sp)
+        }
+        is UpdateStatus.Ready -> Column(
+            modifier.width(320.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF14242B)).padding(14.dp)
+        ) {
+            Text("Update downloaded", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            TvButton("INSTALL UPDATE", selected = true, modifier = Modifier.fillMaxWidth()) { onInstall(status.info, status.file) }
+        }
+        is UpdateStatus.Error -> Column(
+            modifier.width(360.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF3A2022)).padding(14.dp)
+        ) {
+            Text(status.message, color = Color.White, fontSize = 13.sp, maxLines = 3)
+            Spacer(Modifier.height(8.dp))
+            TvButton("CHECK AGAIN", modifier = Modifier.fillMaxWidth(), onClick = onCheck)
+        }
+        else -> Unit
     }
 }
 
@@ -142,7 +230,13 @@ private fun LoginScreen(vm: AppViewModel) {
 }
 
 @Composable
-private fun MainShell(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
+private fun MainShell(
+    vm: AppViewModel,
+    updateStatus: UpdateStatus,
+    onCheckUpdates: () -> Unit,
+    onUpdate: (UpdateInfo) -> Unit,
+    onPlay: (PlayRequest) -> Unit
+) {
     var section by remember { mutableStateOf(Section.HOME) }
     val error by vm.error.collectAsState()
 
@@ -163,9 +257,7 @@ private fun MainShell(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
             Text("SELYRO", color = Accent, fontSize = 27.sp, fontWeight = FontWeight.Bold)
             Text("TV", color = Muted, fontSize = 13.sp)
             Spacer(Modifier.height(18.dp))
-            Section.entries.forEach { item ->
-                TvNavItem(item.label, section == item) { section = item }
-            }
+            Section.entries.forEach { item -> TvNavItem(item.label, section == item) { section = item } }
         }
         Column(Modifier.weight(1f).fillMaxHeight().padding(26.dp)) {
             if (!error.isNullOrBlank()) {
@@ -185,7 +277,7 @@ private fun MainShell(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
                 Section.SERIES -> SeriesScreen(vm, onPlay)
                 Section.FAVORITES -> FavoritesScreen(vm, onPlay)
                 Section.RECENT -> RecentScreen(vm, onPlay)
-                Section.SETTINGS -> SettingsScreen(vm)
+                Section.SETTINGS -> SettingsScreen(vm, updateStatus, onCheckUpdates, onUpdate)
             }
         }
     }
@@ -193,12 +285,7 @@ private fun MainShell(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
 
 @Composable
 private fun HomeScreen(vm: AppViewModel, go: (Section) -> Unit) {
-    val channels by vm.channels.collectAsState()
-    val movies by vm.movies.collectAsState()
-    val series by vm.series.collectAsState()
-    val info by vm.providerInfo.collectAsState()
-    val account by vm.account.collectAsState()
-
+    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val series by vm.series.collectAsState(); val info by vm.providerInfo.collectAsState(); val account by vm.account.collectAsState()
     Heading("Home", account?.name ?: "Selyro TV")
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         DashboardCard("Live TV", channels.size.toString()) { go(Section.LIVE) }
@@ -207,47 +294,21 @@ private fun HomeScreen(vm: AppViewModel, go: (Section) -> Unit) {
     }
     Spacer(Modifier.height(22.dp))
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Panel).padding(20.dp)) {
-        Text("Provider", color = Muted, fontSize = 14.sp)
-        Text(account?.server.orEmpty(), color = Color.White, fontSize = 18.sp)
-        if (info != null) {
-            Spacer(Modifier.height(8.dp))
-            Text("Status: ${info?.status ?: "Connected"}   Active: ${info?.activeConnections ?: "—"}/${info?.maxConnections ?: "—"}", color = Muted)
-        }
+        Text("Provider", color = Muted, fontSize = 14.sp); Text(account?.server.orEmpty(), color = Color.White, fontSize = 18.sp)
+        if (info != null) { Spacer(Modifier.height(8.dp)); Text("Status: ${info?.status ?: "Connected"}   Active: ${info?.activeConnections ?: "—"}/${info?.maxConnections ?: "—"}", color = Muted) }
     }
 }
 
 @Composable
 private fun LiveScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
-    val all by vm.channels.collectAsState()
-    val epg by vm.epgByChannel.collectAsState()
-    val loading by vm.loadingSection.collectAsState()
-    var query by remember { mutableStateOf("") }
-    var group by remember { mutableStateOf("All") }
-    var selected by remember { mutableStateOf<Channel?>(null) }
+    val all by vm.channels.collectAsState(); val epg by vm.epgByChannel.collectAsState(); val loading by vm.loadingSection.collectAsState(); var query by remember { mutableStateOf("") }; var group by remember { mutableStateOf("All") }; var selected by remember { mutableStateOf<Channel?>(null) }
     val groups = remember(all) { listOf("All") + all.map { it.group }.distinct().sorted() }
-    val filtered = remember(all, query, group) {
-        all.asSequence().filter { group == "All" || it.group == group }
-            .filter { query.isBlank() || it.name.contains(query, true) }
-            .toList()
-    }
-
+    val filtered = remember(all, query, group) { all.asSequence().filter { group == "All" || it.group == group }.filter { query.isBlank() || it.name.contains(query, true) }.toList() }
     LaunchedEffect(selected?.id) { selected?.let(vm::loadEpg) }
-
-    Heading("Live TV", "${all.size} channels")
-    TvInput("Search channels", query) { query = it }
-    Spacer(Modifier.height(14.dp))
-    if (loading == "Live TV" && all.isEmpty()) { LoadingBox("Loading channels…"); return }
+    Heading("Live TV", "${all.size} channels"); TvInput("Search channels", query) { query = it }; Spacer(Modifier.height(14.dp)); if (loading == "Live TV" && all.isEmpty()) { LoadingBox("Loading channels…"); return }
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        LazyColumn(Modifier.width(210.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(groups) { g -> TvNavItem(g, group == g) { group = g } }
-        }
-        LazyColumn(Modifier.width(390.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(filtered, key = { it.id }) { channel ->
-                TvListItem(channel.name, channel.group, onFocus = { selected = channel }) {
-                    onPlay(PlayRequest("live", channel.id, channel.name, channel.url))
-                }
-            }
-        }
+        LazyColumn(Modifier.width(210.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(groups) { g -> TvNavItem(g, group == g) { group = g } } }
+        LazyColumn(Modifier.width(390.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(filtered, key = { it.id }) { channel -> TvListItem(channel.name, channel.group, onFocus = { selected = channel }) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url)) } } }
         ChannelDetails(Modifier.weight(1f), selected, epg[selected?.id].orEmpty(), vm, onPlay)
     }
 }
@@ -256,233 +317,71 @@ private fun LiveScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
 private fun ChannelDetails(modifier: Modifier, channel: Channel?, epg: List<EpgProgram>, vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
     Column(modifier.fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(20.dp)) {
         if (channel == null) { Text("Select a channel", color = Muted); return@Column }
-        AsyncImage(
-            model = channel.logo,
-            contentDescription = null,
-            modifier = Modifier.size(110.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)),
-            contentScale = ContentScale.Fit
-        )
-        Spacer(Modifier.height(14.dp))
-        Text(channel.name, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Text(channel.group, color = Muted)
-        Spacer(Modifier.height(14.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TvButton("Play", true) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url)) }
-            TvButton(if (vm.isFavorite("live", channel.id)) "★ Saved" else "☆ Favorite") { vm.toggleFavorite("live", channel.id) }
-        }
-        Spacer(Modifier.height(18.dp))
-        Text("EPG", color = Accent, fontWeight = FontWeight.SemiBold)
-        if (epg.isEmpty()) Text("No guide data", color = Muted) else epg.take(4).forEach { p ->
-            Spacer(Modifier.height(8.dp)); Text(p.title.ifBlank { "Program" }, color = Color.White, fontSize = 15.sp)
-        }
+        AsyncImage(model = channel.logo, contentDescription = null, modifier = Modifier.size(110.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Fit)
+        Spacer(Modifier.height(14.dp)); Text(channel.name, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); Text(channel.group, color = Muted); Spacer(Modifier.height(14.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { TvButton("Play", true) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url)) }; TvButton(if (vm.isFavorite("live", channel.id)) "★ Saved" else "☆ Favorite") { vm.toggleFavorite("live", channel.id) } }
+        Spacer(Modifier.height(18.dp)); Text("EPG", color = Accent, fontWeight = FontWeight.SemiBold); if (epg.isEmpty()) Text("No guide data", color = Muted) else epg.take(4).forEach { p -> Spacer(Modifier.height(8.dp)); Text(p.title.ifBlank { "Program" }, color = Color.White, fontSize = 15.sp) }
     }
 }
 
 @Composable
 private fun MoviesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
-    val all by vm.movies.collectAsState()
-    val loading by vm.loadingSection.collectAsState()
-    var query by remember { mutableStateOf("") }
-    var selected by remember { mutableStateOf<VodItem?>(null) }
-    Heading("Movies", if (all.isEmpty()) "Xtream VOD" else "${all.size} titles")
-    TvInput("Search movies", query) { query = it }
-    Spacer(Modifier.height(14.dp))
-    if (loading == "Movies" && all.isEmpty()) { LoadingBox("Loading movies…"); return }
+    val all by vm.movies.collectAsState(); val loading by vm.loadingSection.collectAsState(); var query by remember { mutableStateOf("") }; var selected by remember { mutableStateOf<VodItem?>(null) }
+    Heading("Movies", if (all.isEmpty()) "Xtream VOD" else "${all.size} titles"); TvInput("Search movies", query) { query = it }; Spacer(Modifier.height(14.dp)); if (loading == "Movies" && all.isEmpty()) { LoadingBox("Loading movies…"); return }
     val filtered = remember(all, query) { all.filter { query.isBlank() || it.name.contains(query, true) } }
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        LazyColumn(Modifier.width(470.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(filtered, key = { it.id }) { movie ->
-                TvListItem(movie.name, listOfNotNull(movie.year, movie.category).joinToString(" • "), onFocus = { selected = movie }) {
-                    onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl))
-                }
-            }
-        }
-        MediaDetails(Modifier.weight(1f), selected?.name, selected?.poster, selected?.plot, selected?.rating) {
-            selected?.let { movie -> onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) }
-        }
+        LazyColumn(Modifier.width(470.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(filtered, key = { it.id }) { movie -> TvListItem(movie.name, listOfNotNull(movie.year, movie.category).joinToString(" • "), onFocus = { selected = movie }) { onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) } } }
+        MediaDetails(Modifier.weight(1f), selected?.name, selected?.poster, selected?.plot, selected?.rating) { selected?.let { movie -> onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) } }
     }
 }
 
 @Composable
 private fun SeriesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
-    val all by vm.series.collectAsState()
-    val details by vm.selectedSeriesDetails.collectAsState()
-    val loading by vm.loadingSection.collectAsState()
-    var query by remember { mutableStateOf("") }
-    var selected by remember { mutableStateOf<SeriesItem?>(null) }
-    Heading("Series", if (all.isEmpty()) "Xtream series" else "${all.size} series")
-    TvInput("Search series", query) { query = it }
-    Spacer(Modifier.height(14.dp))
-    if (loading == "Series" && all.isEmpty()) { LoadingBox("Loading series…"); return }
+    val all by vm.series.collectAsState(); val details by vm.selectedSeriesDetails.collectAsState(); val loading by vm.loadingSection.collectAsState(); var query by remember { mutableStateOf("") }; var selected by remember { mutableStateOf<SeriesItem?>(null) }
+    Heading("Series", if (all.isEmpty()) "Xtream series" else "${all.size} series"); TvInput("Search series", query) { query = it }; Spacer(Modifier.height(14.dp)); if (loading == "Series" && all.isEmpty()) { LoadingBox("Loading series…"); return }
     val filtered = remember(all, query) { all.filter { query.isBlank() || it.name.contains(query, true) } }
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        LazyColumn(Modifier.width(430.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(filtered, key = { it.id }) { item ->
-                TvListItem(item.name, item.category, onFocus = { selected = item }) { vm.loadSeriesDetails(item) }
-            }
-        }
+        LazyColumn(Modifier.width(430.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(filtered, key = { it.id }) { item -> TvListItem(item.name, item.category, onFocus = { selected = item }) { vm.loadSeriesDetails(item) } } }
         Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(18.dp)) {
-            val s = selected
-            if (s == null) { Text("Select a series", color = Muted); return@Column }
-            Text(s.name, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Text(s.plot ?: "", color = Muted, maxLines = 3)
-            Spacer(Modifier.height(12.dp))
-            TvButton("Load episodes", true) { vm.loadSeriesDetails(s) }
-            Spacer(Modifier.height(12.dp))
-            if (loading == "Episodes") Text("Loading episodes…", color = Accent)
-            val episodes = details?.takeIf { it.series.id == s.id }?.episodes.orEmpty()
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(episodes, key = { it.id }) { ep ->
-                    TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty()) {
-                        onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl))
-                    }
-                }
-            }
+            val s = selected; if (s == null) { Text("Select a series", color = Muted); return@Column }; Text(s.name, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); Text(s.plot ?: "", color = Muted, maxLines = 3); Spacer(Modifier.height(12.dp)); TvButton("Load episodes", true) { vm.loadSeriesDetails(s) }; Spacer(Modifier.height(12.dp)); if (loading == "Episodes") Text("Loading episodes…", color = Accent)
+            val episodes = details?.takeIf { it.series.id == s.id }?.episodes.orEmpty(); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(episodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty()) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl)) } } }
         }
     }
 }
 
 @Composable
 private fun FavoritesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
-    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val favorites by vm.favorites.collectAsState()
-    val c = channels.filter { "live:${it.id}" in favorites }
-    val m = movies.filter { "movie:${it.id}" in favorites }
-    Heading("Favorites", "${c.size + m.size} saved")
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        items(c, key = { "c-${it.id}" }) { item -> TvListItem(item.name, "Live • ${item.group}") { onPlay(PlayRequest("live", item.id, item.name, item.url)) } }
-        items(m, key = { "m-${it.id}" }) { item -> TvListItem(item.name, "Movie • ${item.category}") { onPlay(PlayRequest("movie", item.id, item.name, item.streamUrl)) } }
-    }
+    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val favorites by vm.favorites.collectAsState(); val c = channels.filter { "live:${it.id}" in favorites }; val m = movies.filter { "movie:${it.id}" in favorites }
+    Heading("Favorites", "${c.size + m.size} saved"); LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) { items(c, key = { "c-${it.id}" }) { item -> TvListItem(item.name, "Live • ${item.group}") { onPlay(PlayRequest("live", item.id, item.name, item.url)) } }; items(m, key = { "m-${it.id}" }) { item -> TvListItem(item.name, "Movie • ${item.category}") { onPlay(PlayRequest("movie", item.id, item.name, item.streamUrl)) } } }
 }
 
 @Composable
 private fun RecentScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
-    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val recents by vm.recents.collectAsState()
-    val lookup = remember(channels, movies) {
-        buildMap<String, PlayRequest> {
-            channels.forEach { put("live:${it.id}", PlayRequest("live", it.id, it.name, it.url)) }
-            movies.forEach { put("movie:${it.id}", PlayRequest("movie", it.id, it.name, it.streamUrl)) }
-        }
-    }
-    Heading("Recent", "Continue where you left off")
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        items(recents.mapNotNull { lookup[it] }, key = { "${it.kind}-${it.id}" }) { item ->
-            TvListItem(item.title, item.kind.replaceFirstChar { c -> c.uppercase() }) { onPlay(item) }
-        }
-    }
+    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val recents by vm.recents.collectAsState(); val lookup = remember(channels, movies) { buildMap<String, PlayRequest> { channels.forEach { put("live:${it.id}", PlayRequest("live", it.id, it.name, it.url)) }; movies.forEach { put("movie:${it.id}", PlayRequest("movie", it.id, it.name, it.streamUrl)) } } }
+    Heading("Recent", "Continue where you left off"); LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) { items(recents.mapNotNull { lookup[it] }, key = { "${it.kind}-${it.id}" }) { item -> TvListItem(item.title, item.kind.replaceFirstChar { c -> c.uppercase() }) { onPlay(item) } } }
 }
 
 @Composable
-private fun SettingsScreen(vm: AppViewModel) {
+private fun SettingsScreen(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdates: () -> Unit, onUpdate: (UpdateInfo) -> Unit) {
     val account by vm.account.collectAsState(); val profile by vm.playbackProfile.collectAsState()
-    Heading("Settings", "Playback and provider")
-    Text("Buffer profile", color = Color.White, fontSize = 18.sp)
-    Spacer(Modifier.height(10.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        StreamingProfile.entries.forEach { p -> TvButton(p.name.lowercase().replaceFirstChar { it.uppercase() }, p == profile) { vm.setPlaybackProfile(p) } }
+    Heading("Settings", "Playback, provider and updates")
+    Text("Buffer profile", color = Color.White, fontSize = 18.sp); Spacer(Modifier.height(10.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { StreamingProfile.entries.forEach { p -> TvButton(p.name.lowercase().replaceFirstChar { it.uppercase() }, p == profile) { vm.setPlaybackProfile(p) } } }
+    Spacer(Modifier.height(18.dp)); Text("Updates", color = Color.White, fontSize = 18.sp); Spacer(Modifier.height(8.dp))
+    when (updateStatus) {
+        is UpdateStatus.Available -> TvButton("UPDATE TO ${updateStatus.info.versionName}", selected = true) { onUpdate(updateStatus.info) }
+        is UpdateStatus.Checking -> Text("Checking for updates…", color = Muted)
+        is UpdateStatus.Downloading -> Text("Downloading update… ${updateStatus.percent}%", color = Accent)
+        is UpdateStatus.UpToDate -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) { Text("Selyro TV is up to date", color = Accent); TvButton("CHECK AGAIN", onClick = onCheckUpdates) }
+        else -> TvButton("CHECK FOR UPDATES", onClick = onCheckUpdates)
     }
-    Spacer(Modifier.height(22.dp))
-    Text("Fast starts quicker. Stable buffers more for inconsistent connections.", color = Muted)
-    Spacer(Modifier.height(24.dp))
-    Text("Source: ${account?.type?.name ?: ""}", color = Color.White)
-    Text(account?.server.orEmpty(), color = Muted)
-    Spacer(Modifier.height(18.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        TvButton("Refresh live") { vm.loadLive(force = true) }
-        TvButton("Disconnect") { vm.logout() }
-    }
+    Spacer(Modifier.height(18.dp)); Text("Source: ${account?.type?.name ?: ""}", color = Color.White); Text(account?.server.orEmpty(), color = Muted); Spacer(Modifier.height(14.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { TvButton("Refresh live") { vm.loadLive(force = true) }; TvButton("Disconnect") { vm.logout() } }
 }
 
-@Composable private fun Heading(title: String, subtitle: String) {
-    Text(title, color = Color.White, fontSize = 31.sp, fontWeight = FontWeight.Bold)
-    Text(subtitle, color = Muted, fontSize = 15.sp)
-    Spacer(Modifier.height(18.dp))
-}
-
-@Composable private fun DashboardCard(title: String, value: String, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Column(
-        Modifier.width(230.dp).height(130.dp).clip(RoundedCornerShape(16.dp))
-            .background(if (focused) Focus else Panel).onFocusChanged { focused = it.isFocused }
-            .clickable(onClick = onClick).focusable().padding(18.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(title, color = Muted, fontSize = 15.sp)
-        Spacer(Modifier.height(6.dp))
-        Text(value, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable private fun TvNavItem(label: String, selected: Boolean, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-            .background(if (focused) Focus else if (selected) Color(0xFF17242E) else Color.Transparent)
-            .onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable().padding(horizontal = 13.dp, vertical = 11.dp)
-    ) { Text(label, color = if (focused || selected) Color.White else Muted, fontSize = 15.sp) }
-}
-
-@Composable private fun TvListItem(title: String, subtitle: String = "", onFocus: (() -> Unit)? = null, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp)).background(if (focused) Focus else Panel)
-            .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }
-            .clickable(onClick = onClick).focusable().padding(13.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, color = Color.White, fontSize = 16.sp, maxLines = 1)
-            if (subtitle.isNotBlank()) Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1)
-        }
-    }
-}
-
-@Composable private fun TvButton(
-    label: String,
-    selected: Boolean = false,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    var focused by remember { mutableStateOf(false) }
-    val background = when { !enabled -> Color(0xFF171C22); focused -> Accent; selected -> Color(0xFF275A54); else -> Panel }
-    Box(
-        modifier.clip(RoundedCornerShape(10.dp)).background(background)
-            .onFocusChanged { focused = it.isFocused }.clickable(enabled = enabled, onClick = onClick).focusable(enabled)
-            .padding(horizontal = 17.dp, vertical = 10.dp)
-    ) { Text(label, color = if (focused) Color.Black else if (enabled) Color.White else Color.DarkGray, fontWeight = FontWeight.SemiBold) }
-}
-
-@Composable private fun TvInput(label: String, value: String, password: Boolean = false, onValueChange: (String) -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Column {
-        Text(label, color = Muted, fontSize = 13.sp)
-        Spacer(Modifier.height(5.dp))
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            textStyle = TextStyle(color = Color.White, fontSize = 17.sp),
-            singleLine = true,
-            visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-            modifier = Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(10.dp)).background(Panel)
-                .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF26313C), RoundedCornerShape(10.dp))
-                .onFocusChanged { focused = it.isFocused }.padding(horizontal = 14.dp, vertical = 10.dp)
-        )
-    }
-}
-
-@Composable private fun LoadingBox(text: String) {
-    Box(Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(14.dp)).background(Panel), contentAlignment = Alignment.Center) {
-        Text(text, color = Accent, fontSize = 18.sp)
-    }
-}
-
-@Composable private fun MediaDetails(modifier: Modifier, title: String?, image: String?, plot: String?, rating: String?, onPlay: () -> Unit) {
-    Column(modifier.fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(20.dp)) {
-        if (title == null) { Text("Select a title", color = Muted); return@Column }
-        AsyncImage(model = image, contentDescription = null, modifier = Modifier.width(150.dp).height(210.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop)
-        Spacer(Modifier.height(12.dp)); Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        if (!rating.isNullOrBlank()) Text("Rating $rating", color = Accent)
-        if (!plot.isNullOrBlank()) { Spacer(Modifier.height(8.dp)); Text(plot, color = Muted, maxLines = 6) }
-        Spacer(Modifier.height(16.dp)); TvButton("Play", true, onClick = onPlay)
-    }
-}
+@Composable private fun Heading(title: String, subtitle: String) { Text(title, color = Color.White, fontSize = 31.sp, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 15.sp); Spacer(Modifier.height(18.dp)) }
+@Composable private fun DashboardCard(title: String, value: String, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Column(Modifier.width(230.dp).height(130.dp).clip(RoundedCornerShape(16.dp)).background(if (focused) Focus else Panel).onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable().padding(18.dp), verticalArrangement = Arrangement.Center) { Text(title, color = Muted, fontSize = 15.sp); Spacer(Modifier.height(6.dp)); Text(value, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold) } }
+@Composable private fun TvNavItem(label: String, selected: Boolean, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (focused) Focus else if (selected) Color(0xFF17242E) else Color.Transparent).onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable().padding(horizontal = 13.dp, vertical = 11.dp)) { Text(label, color = if (focused || selected) Color.White else Muted, fontSize = 15.sp) } }
+@Composable private fun TvListItem(title: String, subtitle: String = "", onFocus: (() -> Unit)? = null, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp)).background(if (focused) Focus else Panel).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }.clickable(onClick = onClick).focusable().padding(13.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, color = Color.White, fontSize = 16.sp, maxLines = 1); if (subtitle.isNotBlank()) Text(subtitle, color = Muted, fontSize = 12.sp, maxLines = 1) } } }
+@Composable private fun TvButton(label: String, selected: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; val background = when { !enabled -> Color(0xFF171C22); focused -> Accent; selected -> Color(0xFF275A54); else -> Panel }; Box(modifier.clip(RoundedCornerShape(10.dp)).background(background).onFocusChanged { focused = it.isFocused }.clickable(enabled = enabled, onClick = onClick).focusable(enabled).padding(horizontal = 17.dp, vertical = 11.dp)) { Text(label, color = if (focused) Color.Black else if (enabled) Color.White else Color.DarkGray, fontWeight = FontWeight.SemiBold) } }
+@Composable private fun TvInput(label: String, value: String, password: Boolean = false, onValueChange: (String) -> Unit) { var focused by remember { mutableStateOf(false) }; Column { Text(label, color = Muted, fontSize = 13.sp); Spacer(Modifier.height(4.dp)); BasicTextField(value = value, onValueChange = onValueChange, textStyle = TextStyle(color = Color.White, fontSize = 16.sp), singleLine = true, visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, modifier = Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(10.dp)).background(Panel).border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF26313C), RoundedCornerShape(10.dp)).onFocusChanged { focused = it.isFocused }.padding(horizontal = 13.dp, vertical = 10.dp)) } }
+@Composable private fun LoadingBox(text: String) { Box(Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(14.dp)).background(Panel), contentAlignment = Alignment.Center) { Text(text, color = Accent, fontSize = 18.sp) } }
+@Composable private fun MediaDetails(modifier: Modifier, title: String?, image: String?, plot: String?, rating: String?, onPlay: () -> Unit) { Column(modifier.fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(20.dp)) { if (title == null) { Text("Select a title", color = Muted); return@Column }; AsyncImage(model = image, contentDescription = null, modifier = Modifier.width(150.dp).height(210.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop); Spacer(Modifier.height(12.dp)); Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); if (!rating.isNullOrBlank()) Text("Rating $rating", color = Accent); if (!plot.isNullOrBlank()) { Spacer(Modifier.height(8.dp)); Text(plot, color = Muted, maxLines = 6) }; Spacer(Modifier.height(16.dp)); TvButton("Play", true, onClick = onPlay) } }

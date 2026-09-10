@@ -6,6 +6,7 @@ on:
       - 'qa/full-v1-ci'
     paths-ignore:
       - 'ci-artifacts/**'
+      - 'update/**'
   workflow_dispatch:
 
 permissions:
@@ -43,13 +44,26 @@ jobs:
           grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
           grep -q "launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
           grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
-      - name: Export APK to QA branch
+      - name: Publish stable update channel
         run: |
-          mkdir -p ci-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk ci-artifacts/Selyro-TV-v0.2.4-login-ui.apk
-          sha256sum ci-artifacts/Selyro-TV-v0.2.4-login-ui.apk > ci-artifacts/Selyro-TV-v0.2.4-login-ui.sha256
+          set -euxo pipefail
+          mkdir -p ci-artifacts update
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          cp "$APK" ci-artifacts/Selyro-TV-v0.2.5-updater.apk
+          cp "$APK" update/Selyro-TV-latest.apk
+          SHA=$(sha256sum update/Selyro-TV-latest.apk | awk '{print $1}')
+          printf '%s  %s\n' "$SHA" 'Selyro-TV-latest.apk' > update/Selyro-TV-latest.sha256
+          cat > update/latest.json <<EOF
+          {
+            "versionCode": 6,
+            "versionName": "0.2.5-updater",
+            "apkUrl": "https://raw.githubusercontent.com/aseel90/iptv/qa/full-v1-ci/update/Selyro-TV-latest.apk",
+            "sha256": "$SHA",
+            "notes": "Built-in one-click update downloads are now enabled."
+          }
+          EOF
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ci-artifacts/Selyro-TV-v0.2.4-login-ui.apk ci-artifacts/Selyro-TV-v0.2.4-login-ui.sha256
-          git commit -m 'Export Selyro TV v0.2.4 login UI APK' || exit 0
+          git add ci-artifacts/Selyro-TV-v0.2.5-updater.apk update/Selyro-TV-latest.apk update/Selyro-TV-latest.sha256 update/latest.json
+          git commit -m 'Publish Selyro TV v0.2.5 updater APK' || exit 0
           git push origin HEAD:qa/full-v1-ci
