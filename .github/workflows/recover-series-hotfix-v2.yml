@@ -1,0 +1,93 @@
+name: Recover and patch Selyro series v2
+
+on:
+  push:
+    paths:
+      - '.github/workflows/recover-series-hotfix-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qa/full-v1-ci
+      - name: Restore last known-good source from raw GitHub
+        run: |
+          set -euxo pipefail
+          BASE=https://raw.githubusercontent.com/aseel90/iptv/cff23bc6d0c32e19c341f54f4e0fd755db6b5e69
+          curl -fsSL "$BASE/app/src/main/java/com/selyro/tv/ui/SelyroApp.kt" -o app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          curl -fsSL "$BASE/app/build.gradle.kts" -o app/build.gradle.kts
+          curl -fsSL "$BASE/.github/workflows/qa-apk-export.yml" -o .github/workflows/qa-apk-export.yml
+      - name: Apply series-only navigation hotfix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/selyro/tv/ui/SelyroApp.kt')
+          s = p.read_text()
+          old_state = 'var selected by remember { mutableStateOf<SeriesItem?>(null) }; val categories'
+          new_state = 'var selected by remember { mutableStateOf<SeriesItem?>(null) }; var openedSeriesId by remember { mutableStateOf<String?>(null) }; val categories'
+          if old_state not in s:
+              raise SystemExit('series state anchor missing')
+          s = s.replace(old_state, new_state, 1)
+          old_click = '{ selected = item; vm.loadSeriesDetails(item) }'
+          if s.count(old_click) < 2:
+              raise SystemExit(f'expected two series click handlers, found {s.count(old_click)}')
+          s = s.replace(old_click, '{ selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) }', 2)
+          heading = '\n    Heading(tx("Series", "المسلسلات"),'
+          if heading not in s:
+              raise SystemExit('series heading anchor missing')
+          detail = '''
+    val openedSeries = selected?.takeIf { it.id == openedSeriesId }
+    if (openedSeries != null) {
+        BackHandler { openedSeriesId = null; selected = null; vm.clearSeriesDetails() }
+        Heading(openedSeries.name, listOfNotNull(openedSeries.year, openedSeries.category).filter { it.isNotBlank() }.joinToString(" • "))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
+            AsyncImage(openedSeries.poster, openedSeries.name, Modifier.width(120.dp).height(170.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop)
+            Column(Modifier.weight(1f)) {
+                if (!openedSeries.plot.isNullOrBlank()) Text(openedSeries.plot.orEmpty(), color = Muted, fontSize = 13.sp, maxLines = 5)
+                Spacer(Modifier.height(10.dp))
+                TvButton(tx("BACK TO SERIES", "العودة للمسلسلات"), true) { openedSeriesId = null; selected = null; vm.clearSeriesDetails() }
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(tx("Episodes", "الحلقات"), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        val openedEpisodes = details?.takeIf { it.series.id == openedSeries.id }?.episodes.orEmpty()
+        when {
+            loading == "Episodes" -> LoadingBox(tx("Loading episodes…", "جاري تحميل الحلقات…"))
+            openedEpisodes.isEmpty() -> Column { Text(tx("No episodes returned", "لم يتم العثور على حلقات"), color = Muted); Spacer(Modifier.height(10.dp)); TvButton(tx("RETRY", "إعادة المحاولة"), true) { vm.loadSeriesDetails(openedSeries) } }
+            else -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(openedEpisodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty()) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl)) } } }
+        }
+        return
+    }
+'''
+          s = s.replace(heading, detail + heading, 1)
+          p.write_text(s)
+          PY
+      - name: Set 0.2.8 version and exporter
+        run: |
+          sed -i 's/versionCode = 8/versionCode = 9/' app/build.gradle.kts
+          sed -i 's/versionName = "0.2.7-tv-polish"/versionName = "0.2.8-series-hotfix"/' app/build.gradle.kts
+          sed -i 's/Selyro-TV-v0.2.7-tv-polish/Selyro-TV-v0.2.8-series-hotfix/g' .github/workflows/qa-apk-export.yml
+          sed -i 's/VERSION_CODE=8/VERSION_CODE=9/' .github/workflows/qa-apk-export.yml
+          sed -i 's/VERSION_NAME=0.2.7-tv-polish/VERSION_NAME=0.2.8-series-hotfix/' .github/workflows/qa-apk-export.yml
+          sed -i 's/Arabic RTL, multi-server profiles, grid mode, buffering indicator, exit confirmation, and TV UI polish./Urgent series opening hotfix: series details and episodes now open in grid and list modes./' .github/workflows/qa-apk-export.yml
+          sed -i 's/Export stable-signed Selyro TV v0.2.7 TV polish/Export stable-signed Selyro TV v0.2.8 series hotfix/' .github/workflows/qa-apk-export.yml
+      - name: Sanity check recovered files
+        run: |
+          grep -q 'versionCode = 9' app/build.gradle.kts
+          grep -q 'openedSeriesId' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'Selyro-TV-v0.2.8-series-hotfix.apk' .github/workflows/qa-apk-export.yml
+          test "$(cat app/build.gradle.kts)" != 'PLACEHOLDER'
+      - name: Commit hotfix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts .github/workflows/qa-apk-export.yml
+          git commit -m 'Hotfix series navigation in Selyro TV 0.2.8' || exit 0
+          git push origin HEAD:qa/full-v1-ci
