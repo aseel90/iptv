@@ -47,6 +47,13 @@ jobs:
           disable-animations: true
           script: |
             set -euxo pipefail
+            capture() {
+              adb logcat -d -v threadtime > tv-smoke-logcat.txt 2>&1 || true
+              adb shell dumpsys activity activities > tv-smoke-activities.txt 2>&1 || true
+              adb shell dumpsys package com.selyro.tv > tv-smoke-package.txt 2>&1 || true
+            }
+            trap capture EXIT
+
             gradle :app:assembleDebug --stacktrace
             adb install -r app/build/outputs/apk/debug/app-debug.apk
 
@@ -62,12 +69,12 @@ jobs:
             echo 'Launch exactly as Android TV launcher does'
             adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER -p com.selyro.tv | tee /tmp/start.txt
             grep -q 'Status: ok' /tmp/start.txt
-            sleep 6
 
+            sleep 10
             adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.selyro.tv/.MainActivity'
 
-            if adb logcat -d -v brief '*:E' | grep -E 'FATAL EXCEPTION|Process: com.selyro.tv' ; then
+            if adb logcat -d -v brief | grep -A 30 -B 5 -E 'FATAL EXCEPTION|Process: com.selyro.tv' ; then
               echo 'Selyro crashed during TV smoke test'
               exit 1
             fi
@@ -81,13 +88,32 @@ jobs:
           if [ -z "$pr" ]; then exit 0; fi
           if [ "$OUTCOME" = "success" ]; then
             printf '%s\n%s\n%s\n' \
-              '### Android TV launcher smoke: PASS' \
+              '### Android TV startup smoke: PASS' \
               "Commit: ${GITHUB_SHA}" \
-              'Verified install, standard LAUNCHER resolution, LEANBACK_LAUNCHER resolution, startup to resumed MainActivity, and no fatal app crash.' > /tmp/tv-result.md
+              'Verified install, both launcher intents, 10-second resumed MainActivity survival, and no fatal app crash.' > /tmp/tv-result.md
           else
-            printf '%s\n%s\n%s\n' \
-              '### Android TV launcher smoke: FAIL' \
-              "Commit: ${GITHUB_SHA}" \
-              'The TV emulator launchability test failed. Do not distribute this build.' > /tmp/tv-result.md
+            {
+              echo '### Android TV startup smoke: FAIL'
+              echo "Commit: ${GITHUB_SHA}"
+              echo
+              echo 'Relevant startup/crash log:'
+              echo '```text'
+              if [ -f tv-smoke-logcat.txt ]; then
+                grep -A 45 -B 8 -E 'FATAL EXCEPTION|AndroidRuntime|Process: com.selyro.tv|InflateException|Resources\$NotFoundException|NoSuchMethodError|ClassNotFoundException|IllegalStateException' tv-smoke-logcat.txt | head -n 140 || tail -n 100 tv-smoke-logcat.txt
+              else
+                echo 'No logcat file was captured; emulator/setup may have failed before app launch.'
+              fi
+              echo '```'
+            } > /tmp/tv-result.md
           fi
           gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file /tmp/tv-result.md
+      - name: Upload TV smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selyro-tv-smoke-diagnostics
+          path: |
+            tv-smoke-logcat.txt
+            tv-smoke-activities.txt
+            tv-smoke-package.txt
+          if-no-files-found: ignore

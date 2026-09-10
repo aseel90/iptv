@@ -6,7 +6,7 @@ import com.selyro.tv.model.SourceType
 import com.selyro.tv.player.StreamingProfile
 
 class AccountStore(context: Context) {
-    private val secrets = SecretStore()
+    private val secrets by lazy(LazyThreadSafetyMode.NONE) { SecretStore() }
     private val prefs = context.getSharedPreferences("selyro", Context.MODE_PRIVATE)
 
     fun save(account: PlaylistAccount) {
@@ -29,10 +29,17 @@ class AccountStore(context: Context) {
         return PlaylistAccount(
             name = prefs.getString("name", "My IPTV") ?: "My IPTV",
             server = server,
-            username = secrets.decrypt(prefs.getString("user_enc", null)).ifBlank { prefs.getString("user", "").orEmpty() },
-            password = secrets.decrypt(prefs.getString("pass_enc", null)).ifBlank { prefs.getString("pass", "").orEmpty() },
+            username = readSecret("user_enc", "user"),
+            password = readSecret("pass_enc", "pass"),
             type = type
         )
+    }
+
+    private fun readSecret(encryptedKey: String, legacyKey: String): String {
+        val encrypted = prefs.getString(encryptedKey, null)
+        val legacy = prefs.getString(legacyKey, "").orEmpty()
+        if (encrypted.isNullOrEmpty()) return legacy
+        return runCatching { secrets.decrypt(encrypted) }.getOrDefault(legacy)
     }
 
     fun clearAccount() {

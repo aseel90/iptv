@@ -2,10 +2,11 @@
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
-            <gradient android:startColor="#070B10" android:centerColor="#0D131A" android:endColor="#111923" android:angle="90" />
+            <gradient
+                android:startColor="#070B10"
+                android:centerColor="#0D131A"
+                android:endColor="#111923"
+                android:angle="90" />
         </shape>
-    </item>
-    <item android:width="280dp" android:height="280dp" android:gravity="center">
-        <bitmap android:gravity="center" android:src="@drawable/selyro_tv_icon" />
     </item>
 </layer-list>

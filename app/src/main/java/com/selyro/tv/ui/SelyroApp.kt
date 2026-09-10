@@ -48,23 +48,33 @@ private data class PlayRequest(val kind: String, val id: String, val title: Stri
 fun SelyroApp(vm: AppViewModel = viewModel()) {
     val account by vm.account.collectAsState()
     val profile by vm.playbackProfile.collectAsState()
-    val context = LocalContext.current
-    val playback = remember { PlaybackManager(context, profile) }
+    val context = LocalContext.current.applicationContext
+    var playback by remember { mutableStateOf<PlaybackManager?>(null) }
     var playing by remember { mutableStateOf<PlayRequest?>(null) }
 
-    DisposableEffect(playback) { onDispose { playback.release() } }
-    LaunchedEffect(profile) { playback.setProfile(profile) }
+    DisposableEffect(Unit) {
+        onDispose {
+            playback?.release()
+            playback = null
+        }
+    }
+    LaunchedEffect(profile) { playback?.setProfile(profile) }
 
     MaterialTheme {
         Box(Modifier.fillMaxSize().background(Bg)) {
-            if (playing != null) {
-                PlayerScreen(player = playback.player) { playing = null }
+            val activePlayback = playback
+            if (playing != null && activePlayback != null) {
+                PlayerScreen(player = activePlayback.player) {
+                    activePlayback.stop()
+                    playing = null
+                }
             } else if (account == null) {
                 LoginScreen(vm)
             } else {
                 MainShell(vm) { request ->
                     vm.markWatched(request.kind, request.id)
-                    playback.play(request.url, request.title)
+                    val manager = playback ?: PlaybackManager(context, profile).also { playback = it }
+                    manager.play(request.url, request.title)
                     playing = request
                 }
             }
@@ -215,6 +225,7 @@ private fun LiveScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
             .filter { query.isBlank() || it.name.contains(query, true) }
             .toList()
     }
+
     LaunchedEffect(selected?.id) { selected?.let(vm::loadEpg) }
 
     Heading("Live TV", "${all.size} channels")
@@ -460,7 +471,7 @@ private fun SettingsScreen(vm: AppViewModel) {
         AsyncImage(model = image, contentDescription = null, modifier = Modifier.width(150.dp).height(210.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop)
         Spacer(Modifier.height(12.dp)); Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
         if (!rating.isNullOrBlank()) Text("Rating $rating", color = Accent)
-        Spacer(Modifier.height(10.dp)); Text(plot ?: "No description available.", color = Muted, maxLines = 5)
+        if (!plot.isNullOrBlank()) { Spacer(Modifier.height(8.dp)); Text(plot, color = Muted, maxLines = 6) }
         Spacer(Modifier.height(16.dp)); TvButton("Play", true, onClick = onPlay)
     }
 }

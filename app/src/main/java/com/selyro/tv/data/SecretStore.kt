@@ -11,7 +11,7 @@ import javax.crypto.spec.GCMParameterSpec
 
 internal class SecretStore {
     private val alias = "selyro.credentials.v1"
-    private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    private val keyStore by lazy(LazyThreadSafetyMode.NONE) { KeyStore.getInstance("AndroidKeyStore").apply { load(null) } }
 
     private fun key(): SecretKey {
         val existing = keyStore.getKey(alias, null) as? SecretKey
