@@ -90,7 +90,7 @@ object UpdateManager {
                 .setAllowedOverMetered(true)
                 .setAllowedOverRoaming(true)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-                .setDestinationUri(Uri.fromFile(target))
+                .setDestinationInExternalFilesDir(context, "updates", "Selyro-TV-update.apk")
 
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val id = dm.enqueue(request)
