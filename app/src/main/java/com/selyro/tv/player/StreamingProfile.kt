@@ -6,22 +6,7 @@ enum class StreamingProfile(
     val playbackBufferMs: Int,
     val rebufferMs: Int
 ) {
-    FAST(
-        minBufferMs = 6_000,
-        maxBufferMs = 18_000,
-        playbackBufferMs = 700,
-        rebufferMs = 1_500
-    ),
-    BALANCED(
-        minBufferMs = 12_000,
-        maxBufferMs = 35_000,
-        playbackBufferMs = 1_200,
-        rebufferMs = 2_500
-    ),
-    STABLE(
-        minBufferMs = 25_000,
-        maxBufferMs = 60_000,
-        playbackBufferMs = 2_500,
-        rebufferMs = 5_000
-    )
+    FAST(5_000, 15_000, 650, 1_200),
+    BALANCED(10_000, 30_000, 1_000, 2_000),
+    STABLE(20_000, 50_000, 2_000, 4_000)
 }

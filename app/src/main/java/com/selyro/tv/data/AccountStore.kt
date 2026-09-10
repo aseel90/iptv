@@ -2,14 +2,65 @@ package com.selyro.tv.data
 
 import android.content.Context
 import com.selyro.tv.model.PlaylistAccount
+import com.selyro.tv.model.SourceType
+import com.selyro.tv.player.StreamingProfile
 
 class AccountStore(context: Context) {
- private val p=context.getSharedPreferences("selyro",Context.MODE_PRIVATE)
- fun save(a:PlaylistAccount)=p.edit().putString("name",a.name).putString("server",a.server.trimEnd('/')).putString("user",a.username).putString("pass",a.password).apply()
- fun load():PlaylistAccount? { val s=p.getString("server",null)?:return null; return PlaylistAccount(p.getString("name","My IPTV")!!,s,p.getString("user","")!!,p.getString("pass","")!!) }
- fun clear()=p.edit().clear().apply()
- fun favorite(id:String,on:Boolean){ val x=p.getStringSet("favorites",emptySet())!!.toMutableSet(); if(on)x.add(id) else x.remove(id); p.edit().putStringSet("favorites",x).apply() }
- fun favorites():Set<String> = p.getStringSet("favorites",emptySet())?:emptySet()
- fun recent(id:String){ val l=(p.getString("recent","")?:"").split('|').filter{it.isNotBlank()&&it!=id}.toMutableList(); l.add(0,id); p.edit().putString("recent",l.take(30).joinToString("|")).apply() }
- fun recents():List<String>=(p.getString("recent","")?:"").split('|').filter{it.isNotBlank()}
+    private val prefs = context.getSharedPreferences("selyro", Context.MODE_PRIVATE)
+
+    fun save(account: PlaylistAccount) {
+        prefs.edit()
+            .putString("name", account.name)
+            .putString("server", account.server.trim())
+            .putString("user", account.username)
+            .putString("pass", account.password)
+            .putString("source_type", account.type.name)
+            .apply()
+    }
+
+    fun load(): PlaylistAccount? {
+        val server = prefs.getString("server", null) ?: return null
+        val type = runCatching {
+            SourceType.valueOf(prefs.getString("source_type", SourceType.XTREAM.name).orEmpty())
+        }.getOrDefault(SourceType.XTREAM)
+        return PlaylistAccount(
+            name = prefs.getString("name", "My IPTV") ?: "My IPTV",
+            server = server,
+            username = prefs.getString("user", "").orEmpty(),
+            password = prefs.getString("pass", "").orEmpty(),
+            type = type
+        )
+    }
+
+    fun clearAccount() {
+        prefs.edit()
+            .remove("name").remove("server").remove("user").remove("pass").remove("source_type")
+            .apply()
+    }
+
+    fun setFavorite(key: String, enabled: Boolean) {
+        val set = prefs.getStringSet("favorites", emptySet()).orEmpty().toMutableSet()
+        if (enabled) set.add(key) else set.remove(key)
+        prefs.edit().putStringSet("favorites", set).apply()
+    }
+
+    fun favorites(): Set<String> = prefs.getStringSet("favorites", emptySet()).orEmpty().toSet()
+
+    fun addRecent(key: String) {
+        val list = prefs.getString("recent", "").orEmpty()
+            .split('|').filter { it.isNotBlank() && it != key }.toMutableList()
+        list.add(0, key)
+        prefs.edit().putString("recent", list.take(50).joinToString("|")).apply()
+    }
+
+    fun recents(): List<String> = prefs.getString("recent", "").orEmpty()
+        .split('|').filter { it.isNotBlank() }
+
+    fun playbackProfile(): StreamingProfile = runCatching {
+        StreamingProfile.valueOf(prefs.getString("playback_profile", StreamingProfile.BALANCED.name).orEmpty())
+    }.getOrDefault(StreamingProfile.BALANCED)
+
+    fun setPlaybackProfile(profile: StreamingProfile) {
+        prefs.edit().putString("playback_profile", profile.name).apply()
+    }
 }
