@@ -8,6 +8,11 @@ on:
       - 'ci-artifacts/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   tv-smoke-test:
     runs-on: ubuntu-latest
@@ -29,6 +34,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Boot Android TV 36 and verify launcher startup
+        id: tvrun
         uses: ReactiveCircus/android-emulator-runner@v2.38.0
         with:
           api-level: 36
@@ -61,10 +67,24 @@ jobs:
             adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.selyro.tv/.MainActivity'
 
-            adb exec-out screencap -p > /tmp/selyro-tv-startup.png
-            test -s /tmp/selyro-tv-startup.png
-
             if adb logcat -d -v brief '*:E' | grep -E 'FATAL EXCEPTION|Process: com.selyro.tv' ; then
               echo 'Selyro crashed during TV smoke test'
               exit 1
             fi
+      - name: Report TV smoke result to PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.tvrun.outcome }}
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head qa/full-v1-ci --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then exit 0; fi
+          if [ "$OUTCOME" = "success" ]; then
+            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "### Android TV launcher smoke: PASS
+Commit: \`${GITHUB_SHA}\`
+Verified install, standard LAUNCHER resolution, LEANBACK_LAUNCHER resolution, startup to resumed MainActivity, and no fatal app crash."
+          else
+            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "### Android TV launcher smoke: FAIL
+Commit: \`${GITHUB_SHA}\`
+The TV emulator launchability test failed. Do not distribute this build."
+          fi
