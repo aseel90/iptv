@@ -14,7 +14,10 @@ import androidx.media3.ui.PlayerView
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(player: Player, onBack: () -> Unit) {
-    BackHandler(onBack = onBack)
+    BackHandler {
+        player.stop()
+        onBack()
+    }
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
@@ -23,7 +26,10 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
                 useController = true
                 setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                 keepScreenOn = true
-                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
             }
         },
         update = { it.player = player }
