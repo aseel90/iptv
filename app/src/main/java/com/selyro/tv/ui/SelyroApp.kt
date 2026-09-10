@@ -3,6 +3,7 @@ package com.selyro.tv.ui
 import android.app.Activity
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -48,12 +50,12 @@ import com.selyro.tv.update.UpdateManager
 import com.selyro.tv.update.UpdateStatus
 import kotlinx.coroutines.launch
 
-private val Bg = Color(0xFF070B10)
-private val Rail = Color(0xFF0D131A)
-private val Panel = Color(0xFF111923)
-private val Focus = Color(0xFF20313D)
-private val Accent = Color(0xFF63D8C6)
-private val Muted = Color(0xFFAAB5C1)
+private val Bg = Color(0xFF05080D)
+private val Rail = Color(0xFF090E15)
+private val Panel = Color(0xFF0E1620)
+private val Focus = Color(0xFF203346)
+private val Accent = Color(0xFF6BE4D2)
+private val Muted = Color(0xFF9AA9B8)
 private val Danger = Color(0xFFFF8A80)
 private val LocalAppLanguage = compositionLocalOf { AppLanguage.ENGLISH }
 
@@ -202,7 +204,37 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
 
 @Composable private fun HomeScreen(vm: AppViewModel, go: (Section) -> Unit) {
     val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val series by vm.series.collectAsState(); val info by vm.providerInfo.collectAsState(); val account by vm.account.collectAsState()
-    Heading(tx("Home", "الرئيسية"), account?.name ?: "Selyro TV"); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) { DashboardCard(tx("Live TV", "القنوات"), channels.size.toString(), Modifier.weight(1f)) { go(Section.LIVE) }; DashboardCard(tx("Movies", "الأفلام"), if (movies.isEmpty()) tx("Open to load", "افتح للتحميل") else movies.size.toString(), Modifier.weight(1f)) { go(Section.MOVIES) }; DashboardCard(tx("Series", "المسلسلات"), if (series.isEmpty()) tx("Open to load", "افتح للتحميل") else series.size.toString(), Modifier.weight(1f)) { go(Section.SERIES) } }; Spacer(Modifier.height(18.dp)); Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Panel).padding(18.dp)) { Text(tx("Provider", "السيرفر الحالي"), color = Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(4.dp)); Text(account?.server.orEmpty(), color = Color.White, fontSize = 16.sp, maxLines = 1); if (info != null) { Spacer(Modifier.height(8.dp)); Text(tx("Status", "الحالة") + ": ${info?.status ?: tx("Connected", "متصل")}   •   " + tx("Active", "الاتصالات") + ": ${info?.activeConnections ?: "—"}/${info?.maxConnections ?: "—"}", color = Muted, fontSize = 13.sp) } }
+    Heading(tx("Home", "الرئيسية"), tx("Your entertainment, without the clutter", "ترفيهك بشكل أبسط وأوضح"))
+    Row(
+        Modifier.fillMaxWidth().height(194.dp).clip(RoundedCornerShape(24.dp))
+            .background(Color(0xFF10272D)).border(1.dp, Color(0xFF1E4B4B), RoundedCornerShape(24.dp)).padding(26.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(tx("CONNECTED PROVIDER", "السيرفر المتصل"), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text(account?.name ?: "Selyro TV", color = Color.White, fontSize = 29.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Spacer(Modifier.height(7.dp))
+            Text(
+                "${info?.status ?: tx("Connected", "متصل")}  •  ${info?.activeConnections ?: "—"}/${info?.maxConnections ?: "—"} ${tx("connections", "اتصالات")}",
+                color = Muted, fontSize = 13.sp
+            )
+            Spacer(Modifier.height(17.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                TvButton(tx("WATCH LIVE", "شاهد القنوات"), true) { go(Section.LIVE) }
+                TvButton(tx("BROWSE MOVIES", "تصفح الأفلام")) { go(Section.MOVIES) }
+            }
+        }
+        Image(painterResource(R.drawable.selyro_tv_icon), "Selyro TV", Modifier.size(116.dp))
+    }
+    Spacer(Modifier.height(19.dp))
+    Text(tx("Browse", "تصفح"), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(10.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        DashboardCard(tx("Live TV", "القنوات"), channels.size.toString(), Modifier.weight(1f)) { go(Section.LIVE) }
+        DashboardCard(tx("Movies", "الأفلام"), if (movies.isEmpty()) tx("Browse", "تصفح") else movies.size.toString(), Modifier.weight(1f)) { go(Section.MOVIES) }
+        DashboardCard(tx("Series", "المسلسلات"), if (series.isEmpty()) tx("Browse", "تصفح") else series.size.toString(), Modifier.weight(1f)) { go(Section.SERIES) }
+    }
 }
 
 @Composable private fun LiveScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
@@ -271,13 +303,179 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
 
 @Composable private fun ExitConfirmDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) { Dialog(onDismissRequest = onDismiss) { Column(Modifier.widthIn(min = 340.dp, max = 440.dp).clip(RoundedCornerShape(18.dp)).background(Panel).border(1.dp, Color(0xFF2B3C49), RoundedCornerShape(18.dp)).padding(22.dp)) { Text(tx("Exit Selyro TV?", "الخروج من Selyro TV؟"), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(7.dp)); Text(tx("Are you sure you want to close the app?", "هل أنت متأكد من إغلاق التطبيق؟"), color = Muted, fontSize = 13.sp); Spacer(Modifier.height(18.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { TvButton(tx("CANCEL", "إلغاء"), true, modifier = Modifier.weight(1f), onClick = onDismiss); TvButton(tx("EXIT", "خروج"), modifier = Modifier.weight(1f), onClick = onConfirm) } } } }
 
-@Composable private fun MediaGridCard(title: String, image: String?, meta: String?, onFocus: (() -> Unit)? = null, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(13.dp)).background(if (focused) Focus else Panel).border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF1C2833), RoundedCornerShape(13.dp)).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }.clickable(onClick = onClick).focusable().padding(7.dp)) { AsyncImage(image, title, Modifier.fillMaxWidth().aspectRatio(.70f).clip(RoundedCornerShape(9.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop); Spacer(Modifier.height(7.dp)); Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2); if (!meta.isNullOrBlank()) Text(meta, color = Muted, fontSize = 10.sp, maxLines = 1) } }
-@Composable private fun ChannelGridCard(channel: Channel, onFocus: (() -> Unit)? = null, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Column(Modifier.fillMaxWidth().height(132.dp).clip(RoundedCornerShape(13.dp)).background(if (focused) Focus else Panel).border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF1C2833), RoundedCornerShape(13.dp)).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }.clickable(onClick = onClick).focusable().padding(9.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { AsyncImage(channel.logo, channel.name, Modifier.size(64.dp).clip(RoundedCornerShape(9.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Fit); Spacer(Modifier.height(7.dp)); Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2) } }
-@Composable private fun Heading(title: String, subtitle: String) { Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 13.sp, maxLines = 1); Spacer(Modifier.height(14.dp)) }
-@Composable private fun DashboardCard(title: String, value: String, modifier: Modifier = Modifier, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Column(modifier.height(116.dp).clip(RoundedCornerShape(16.dp)).background(if (focused) Focus else Panel).border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF1C2833), RoundedCornerShape(16.dp)).onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable().padding(15.dp), verticalArrangement = Arrangement.Center) { Text(title, color = if (focused) Color.White else Muted, fontSize = 14.sp); Spacer(Modifier.height(5.dp)); Text(value, color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 1) } }
-@Composable private fun TvNavItem(label: String, selected: Boolean, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (focused) Focus else if (selected) Color(0xFF17242E) else Color.Transparent).border(if (focused) 1.dp else 0.dp, Accent, RoundedCornerShape(10.dp)).onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable().padding(horizontal = 11.dp, vertical = 9.dp)) { Text(label, color = if (focused || selected) Color.White else Muted, fontSize = 14.sp, maxLines = 2) } }
-@Composable private fun TvListItem(title: String, subtitle: String = "", onFocus: (() -> Unit)? = null, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp)).background(if (focused) Focus else Panel).border(if (focused) 1.dp else 0.dp, Accent, RoundedCornerShape(11.dp)).onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }.clickable(onClick = onClick).focusable().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(title, color = Color.White, fontSize = 15.sp, maxLines = 1); if (subtitle.isNotBlank()) Text(subtitle, color = Muted, fontSize = 11.sp, maxLines = 1) } } }
-@Composable private fun TvButton(label: String, selected: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) { var focused by remember { mutableStateOf(false) }; val background = when { !enabled -> Color(0xFF171C22); focused -> Accent; selected -> Color(0xFF275A54); else -> Panel }; Box(modifier.clip(RoundedCornerShape(10.dp)).background(background).onFocusChanged { focused = it.isFocused }.clickable(enabled = enabled, onClick = onClick).focusable(enabled).padding(horizontal = 17.dp, vertical = 11.dp)) { Text(label, color = if (focused) Color.Black else if (enabled) Color.White else Color.DarkGray, fontWeight = FontWeight.SemiBold) } }
-@Composable private fun TvInput(label: String, value: String, password: Boolean = false, onValueChange: (String) -> Unit) { var focused by remember { mutableStateOf(false) }; Column { Text(label, color = Muted, fontSize = 13.sp); Spacer(Modifier.height(4.dp)); BasicTextField(value, onValueChange, textStyle = TextStyle(color = Color.White, fontSize = 16.sp), singleLine = true, visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None, modifier = Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(10.dp)).background(Panel).border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF26313C), RoundedCornerShape(10.dp)).onFocusChanged { focused = it.isFocused }.padding(horizontal = 13.dp, vertical = 10.dp)) } }
-@Composable private fun LoadingBox(text: String) { Box(Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(14.dp)).background(Panel), contentAlignment = Alignment.Center) { Text(text, color = Accent, fontSize = 18.sp) } }
-@Composable private fun MediaDetails(modifier: Modifier, title: String?, image: String?, plot: String?, rating: String?, onPlay: () -> Unit) { Column(modifier.fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(20.dp)) { if (title == null) { Text(tx("Select a title", "اختر محتوى"), color = Muted); return@Column }; AsyncImage(image, null, Modifier.width(150.dp).height(210.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop); Spacer(Modifier.height(12.dp)); Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold); if (!rating.isNullOrBlank()) Text(tx("Rating", "التقييم") + " $rating", color = Accent); if (!plot.isNullOrBlank()) { Spacer(Modifier.height(8.dp)); Text(plot, color = Muted, maxLines = 6) }; Spacer(Modifier.height(16.dp)); TvButton(tx("Play", "تشغيل"), true, onClick = onPlay) } }
+@Composable
+private fun MediaGridCard(title: String, image: String?, meta: String?, onFocus: (() -> Unit)? = null, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.045f else 1f, label = "media-card-focus")
+    Column(
+        Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(15.dp)).background(if (focused) Focus else Panel)
+            .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF20303E), RoundedCornerShape(15.dp))
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }
+            .clickable(onClick = onClick).focusable().padding(7.dp)
+    ) {
+        Box {
+            AsyncImage(image, title, Modifier.fillMaxWidth().aspectRatio(.70f).clip(RoundedCornerShape(11.dp)).background(Color(0xFF16222D)), contentScale = ContentScale.Crop)
+            if (focused) Box(Modifier.align(Alignment.BottomEnd).padding(8.dp).size(30.dp).clip(RoundedCornerShape(15.dp)).background(Accent), contentAlignment = Alignment.Center) { Text("▶", color = Color(0xFF061014), fontSize = 11.sp) }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(title, color = Color.White, fontSize = 13.sp, fontWeight = if (focused) FontWeight.Bold else FontWeight.SemiBold, maxLines = 2)
+        if (!meta.isNullOrBlank()) Text(meta, color = Muted, fontSize = 10.sp, maxLines = 1)
+    }
+}
+
+@Composable
+private fun ChannelGridCard(channel: Channel, onFocus: (() -> Unit)? = null, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.04f else 1f, label = "channel-card-focus")
+    Column(
+        Modifier.fillMaxWidth().height(138.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(15.dp)).background(if (focused) Focus else Panel)
+            .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF20303E), RoundedCornerShape(15.dp))
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }
+            .clickable(onClick = onClick).focusable().padding(10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        AsyncImage(channel.logo, channel.name, Modifier.size(66.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF16222D)).padding(4.dp), contentScale = ContentScale.Fit)
+        Spacer(Modifier.height(8.dp))
+        Text(channel.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+    }
+}
+
+@Composable
+private fun Heading(title: String, subtitle: String) {
+    Text(title, color = Color.White, fontSize = 31.sp, fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(2.dp))
+    Text(subtitle, color = Muted, fontSize = 13.sp, maxLines = 1)
+    Spacer(Modifier.height(16.dp))
+}
+
+@Composable
+private fun DashboardCard(title: String, value: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.035f else 1f, label = "dashboard-focus")
+    Column(
+        modifier.height(122.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(18.dp)).background(if (focused) Focus else Panel)
+            .border(1.dp, if (focused) Accent else Color(0xFF20303E), RoundedCornerShape(18.dp))
+            .onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable().padding(17.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(title, color = if (focused) Color.White else Muted, fontSize = 14.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(value, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
+@Composable
+private fun TvNavItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.025f else 1f, label = "nav-focus")
+    Row(
+        Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (focused) Focus else if (selected) Color(0xFF14242F) else Color.Transparent)
+            .border(1.dp, if (focused) Accent.copy(alpha = .55f) else Color.Transparent, RoundedCornerShape(12.dp))
+            .onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(if (selected || focused) Accent else Color.Transparent))
+        Spacer(Modifier.width(9.dp))
+        Text(label, color = if (focused || selected) Color.White else Muted, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 2)
+    }
+}
+
+@Composable
+private fun TvListItem(title: String, subtitle: String = "", onFocus: (() -> Unit)? = null, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.012f else 1f, label = "row-focus")
+    Row(
+        Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(13.dp)).background(if (focused) Focus else Panel)
+            .border(1.dp, if (focused) Accent.copy(alpha = .5f) else Color(0xFF1C2935), RoundedCornerShape(13.dp))
+            .onFocusChanged { focused = it.isFocused; if (it.isFocused) onFocus?.invoke() }
+            .clickable(onClick = onClick).focusable().padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(31.dp).clip(RoundedCornerShape(9.dp)).background(if (focused) Accent.copy(alpha = .18f) else Color.White.copy(alpha = .04f)), contentAlignment = Alignment.Center) { Text("▶", color = if (focused) Accent else Color(0xFF647483), fontSize = 10.sp) }
+        Spacer(Modifier.width(11.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 14.sp, fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+            if (subtitle.isNotBlank()) Text(subtitle, color = Muted, fontSize = 11.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun TvButton(label: String, selected: Boolean = false, enabled: Boolean = true, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (focused) 1.035f else 1f, label = "button-focus")
+    val background = when {
+        !enabled -> Color(0xFF111820)
+        focused -> Accent
+        selected -> Color(0xFF214D49)
+        else -> Color(0xFF141F2B)
+    }
+    Box(
+        modifier.graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(11.dp)).background(background)
+            .border(1.dp, if (focused || selected) Accent.copy(alpha = .6f) else Color(0xFF243443), RoundedCornerShape(11.dp))
+            .onFocusChanged { focused = it.isFocused }.clickable(enabled = enabled, onClick = onClick).focusable(enabled)
+            .padding(horizontal = 17.dp, vertical = 10.dp)
+    ) {
+        Text(label, color = if (focused) Color(0xFF061014) else if (enabled) Color.White else Color.DarkGray, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun TvInput(label: String, value: String, password: Boolean = false, onValueChange: (String) -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Column {
+        Text(label, color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(5.dp))
+        BasicTextField(
+            value, onValueChange,
+            textStyle = TextStyle(color = Color.White, fontSize = 15.sp),
+            singleLine = true,
+            visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+            modifier = Modifier.fillMaxWidth().height(47.dp).clip(RoundedCornerShape(12.dp)).background(Panel)
+                .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF263746), RoundedCornerShape(12.dp))
+                .onFocusChanged { focused = it.isFocused }.padding(horizontal = 14.dp, vertical = 13.dp)
+        )
+    }
+}
+
+@Composable
+private fun LoadingBox(text: String) {
+    Row(
+        Modifier.fillMaxWidth().height(172.dp).clip(RoundedCornerShape(18.dp)).background(Panel)
+            .border(1.dp, Color(0xFF20303E), RoundedCornerShape(18.dp)),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(9.dp).clip(RoundedCornerShape(5.dp)).background(Accent))
+        Spacer(Modifier.width(10.dp))
+        Text(text, color = Color.White, fontSize = 15.sp)
+    }
+}
+
+@Composable
+private fun MediaDetails(modifier: Modifier, title: String?, image: String?, plot: String?, rating: String?, onPlay: () -> Unit) {
+    Column(
+        modifier.fillMaxHeight().clip(RoundedCornerShape(20.dp)).background(Panel)
+            .border(1.dp, Color(0xFF20303E), RoundedCornerShape(20.dp)).padding(21.dp)
+    ) {
+        if (title == null) {
+            Text(tx("Select a title", "اختر محتوى"), color = Muted)
+            return@Column
+        }
+        AsyncImage(image, null, Modifier.width(158.dp).height(224.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF16222D)), contentScale = ContentScale.Crop)
+        Spacer(Modifier.height(13.dp))
+        Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+        if (!rating.isNullOrBlank()) { Spacer(Modifier.height(5.dp)); Text("★ $rating", color = Accent, fontSize = 12.sp) }
+        if (!plot.isNullOrBlank()) { Spacer(Modifier.height(10.dp)); Text(plot, color = Muted, fontSize = 13.sp, lineHeight = 19.sp, maxLines = 6) }
+        Spacer(Modifier.height(16.dp))
+        TvButton(tx("PLAY", "تشغيل"), true, onClick = onPlay)
+    }
+}
