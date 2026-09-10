@@ -1,0 +1,45 @@
+name: Compile Log
+
+on:
+  push:
+    branches: ['qa/full-v1-ci']
+    paths:
+      - '.github/workflows/compile-log.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compile-log:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qa/full-v1-ci
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Gradle 8.13
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Compile and capture log
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ci-artifacts
+          gradle :app:compileDebugKotlin --stacktrace > ci-artifacts/compile-0.2.7.log 2>&1
+          CODE=$?
+          echo "EXIT_CODE=$CODE" >> ci-artifacts/compile-0.2.7.log
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci-artifacts/compile-0.2.7.log
+          git commit -m 'Capture Selyro 0.2.7 compile log' || true
+          git push origin HEAD:qa/full-v1-ci || true
+          exit $CODE
