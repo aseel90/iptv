@@ -39,8 +39,8 @@ jobs:
         run: |
           set -euxo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
-          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/master/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
-          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/master/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
           $ANDROID_HOME/build-tools/36.0.0/apksigner sign \
             --key /tmp/selyro-testkey.pk8 \
             --cert /tmp/selyro-testkey.x509.pem \
