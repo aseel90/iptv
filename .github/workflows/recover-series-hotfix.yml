@@ -1,4 +1,4 @@
-name: Recover Selyro series hotfix
+name: Recover Selyro files
 
 on:
   push:
@@ -17,57 +17,15 @@ jobs:
         with:
           ref: qa/full-v1-ci
           fetch-depth: 0
-      - name: Restore last good files
+      - name: Restore last known-good 0.2.7 files
         run: |
           git show cff23bc6d0c32e19c341f54f4e0fd755db6b5e69:app/src/main/java/com/selyro/tv/ui/SelyroApp.kt > app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
           git show cff23bc6d0c32e19c341f54f4e0fd755db6b5e69:app/build.gradle.kts > app/build.gradle.kts
           git show cff23bc6d0c32e19c341f54f4e0fd755db6b5e69:.github/workflows/qa-apk-export.yml > .github/workflows/qa-apk-export.yml
-      - name: Apply series-only hotfix
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('app/src/main/java/com/selyro/tv/ui/SelyroApp.kt')
-          s = p.read_text()
-          needle = '''    Heading(tx("Series", "المسلسلات"), if (all.isEmpty()) tx("Xtream series", "مسلسلات Xtream") else "${all.size} ${tx("series", "مسلسل")} • ${categories.size} ${tx("categories", "تصنيف")}"); TvInput(tx("Search series", "بحث في المسلسلات"), query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Series" && all.isEmpty()) { LoadingBox(tx("Loading series…", "جاري تحميل المسلسلات…")); return }'''
-          replacement = '''    if (selected != null) {
-              val current = selected!!
-              Heading(current.name, listOfNotNull(current.year, current.category).filter { it.isNotBlank() }.joinToString(" • "))
-              Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                  AsyncImage(current.poster, current.name, Modifier.width(120.dp).height(170.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop)
-                  Column(Modifier.weight(1f)) {
-                      if (!current.plot.isNullOrBlank()) Text(current.plot.orEmpty(), color = Muted, fontSize = 13.sp, maxLines = 5)
-                      Spacer(Modifier.height(10.dp))
-                      TvButton(tx("BACK TO SERIES", "العودة للمسلسلات"), true) { selected = null; vm.clearSeriesDetails() }
-                  }
-              }
-              Spacer(Modifier.height(14.dp))
-              Text(tx("Episodes", "الحلقات"), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-              Spacer(Modifier.height(8.dp))
-              val episodes = details?.takeIf { it.series.id == current.id }?.episodes.orEmpty()
-              when {
-                  loading == "Episodes" -> LoadingBox(tx("Loading episodes…", "جاري تحميل الحلقات…"))
-                  episodes.isEmpty() -> Column { Text(tx("No episodes returned", "لم يتم العثور على حلقات"), color = Muted); Spacer(Modifier.height(10.dp)); TvButton(tx("RETRY", "إعادة المحاولة"), true) { vm.loadSeriesDetails(current) } }
-                  else -> LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(episodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty()) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl)) } } }
-              }
-              return
-          }
-          ''' + needle
-          if needle not in s:
-              raise SystemExit('Series hotfix anchor not found')
-          s = s.replace(needle, replacement, 1)
-          p.write_text(s)
-          PY
-          sed -i 's/versionCode = 8/versionCode = 9/' app/build.gradle.kts
-          sed -i 's/versionName = "0.2.7-tv-polish"/versionName = "0.2.8-series-hotfix"/' app/build.gradle.kts
-          sed -i 's/Selyro-TV-v0.2.7-tv-polish/Selyro-TV-v0.2.8-series-hotfix/g' .github/workflows/qa-apk-export.yml
-          sed -i 's/VERSION_CODE=8/VERSION_CODE=9/' .github/workflows/qa-apk-export.yml
-          sed -i 's/VERSION_NAME=0.2.7-tv-polish/VERSION_NAME=0.2.8-series-hotfix/' .github/workflows/qa-apk-export.yml
-          sed -i 's/Arabic RTL, multi-server profiles, grid mode, buffering indicator, exit confirmation, and TV UI polish./Urgent series opening hotfix: series details and episodes open correctly in grid and list modes./' .github/workflows/qa-apk-export.yml
-          sed -i 's/Export stable-signed Selyro TV v0.2.7 TV polish/Export stable-signed Selyro TV v0.2.8 series hotfix/' .github/workflows/qa-apk-export.yml
-      - name: Commit recovered hotfix
+      - name: Commit recovery
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts .github/workflows/qa-apk-export.yml
-          git commit -m 'Urgent fix: open series details and episodes' || exit 0
+          git commit -m 'Recover Selyro files to last good 0.2.7' || exit 0
           git push origin HEAD:qa/full-v1-ci
