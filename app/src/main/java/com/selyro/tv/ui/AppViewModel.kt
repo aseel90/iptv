@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.selyro.tv.data.AccountStore
+import com.selyro.tv.data.AppLanguage
+import com.selyro.tv.data.DisplayMode
 import com.selyro.tv.iptv.M3uClient
 import com.selyro.tv.iptv.XtreamClient
 import com.selyro.tv.model.*
@@ -19,6 +21,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _account = MutableStateFlow(store.load())
     val account = _account.asStateFlow()
+    val accounts = MutableStateFlow(store.accounts())
 
     val channels = MutableStateFlow<List<Channel>>(emptyList())
     val movies = MutableStateFlow<List<VodItem>>(emptyList())
@@ -32,6 +35,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val favorites = MutableStateFlow(store.favorites())
     val recents = MutableStateFlow(store.recents())
     val playbackProfile = MutableStateFlow(store.playbackProfile())
+    val language = MutableStateFlow(store.language())
+    val displayMode = MutableStateFlow(store.displayMode())
+    val addingAccount = MutableStateFlow(false)
 
     private var epgJob: Job? = null
 
@@ -44,26 +50,72 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             loading.value = true
             error.value = null
             runCatching {
-                when (account.type) {
+                val loadedChannels = when (account.type) {
                     SourceType.XTREAM -> {
                         require(account.username.isNotBlank() && account.password.isNotBlank()) { "Username and password are required" }
                         val client = XtreamClient(account)
                         providerInfo.value = client.authenticate() ?: error("Server login failed")
-                        channels.value = client.live()
+                        client.live()
                     }
                     SourceType.M3U -> {
-                        channels.value = M3uClient.fetch(account.server).channels
                         providerInfo.value = null
+                        M3uClient.fetch(account.server).channels
                     }
                 }
-                require(channels.value.isNotEmpty()) { "No live channels were returned" }
+                require(loadedChannels.isNotEmpty()) { "No live channels were returned" }
                 store.save(account)
+                accounts.value = store.accounts()
                 _account.value = account
+                channels.value = loadedChannels
                 movies.value = emptyList()
                 series.value = emptyList()
                 epgByChannel.value = emptyMap()
+                selectedSeriesDetails.value = null
+                addingAccount.value = false
             }.onFailure { error.value = friendlyError(it) }
             loading.value = false
+        }
+    }
+
+    fun beginAddAccount() {
+        addingAccount.value = true
+        _account.value = null
+        error.value = null
+    }
+
+    fun cancelAddAccount() {
+        addingAccount.value = false
+        _account.value = store.load()
+        if (_account.value != null && channels.value.isEmpty()) loadLive(force = true)
+    }
+
+    fun switchAccount(target: PlaylistAccount) {
+        if (_account.value == target) return
+        store.setActive(target)
+        _account.value = target
+        channels.value = emptyList()
+        movies.value = emptyList()
+        series.value = emptyList()
+        providerInfo.value = null
+        epgByChannel.value = emptyMap()
+        selectedSeriesDetails.value = null
+        error.value = null
+        loadLive(force = true)
+    }
+
+    fun removeAccount(target: PlaylistAccount) {
+        val wasActive = _account.value == target
+        store.remove(target)
+        accounts.value = store.accounts()
+        if (wasActive) {
+            _account.value = store.load()
+            channels.value = emptyList()
+            movies.value = emptyList()
+            series.value = emptyList()
+            providerInfo.value = null
+            epgByChannel.value = emptyMap()
+            selectedSeriesDetails.value = null
+            if (_account.value != null) loadLive(force = true)
         }
     }
 
@@ -152,8 +204,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         playbackProfile.value = profile
     }
 
+    fun setLanguage(value: AppLanguage) {
+        store.setLanguage(value)
+        language.value = value
+    }
+
+    fun setDisplayMode(value: DisplayMode) {
+        store.setDisplayMode(value)
+        displayMode.value = value
+    }
+
     fun logout() {
         store.clearAccount()
+        accounts.value = emptyList()
+        addingAccount.value = false
         _account.value = null
         channels.value = emptyList()
         movies.value = emptyList()

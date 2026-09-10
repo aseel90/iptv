@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item>
+    <item android:width="320dp" android:height="180dp" android:gravity="center">
         <shape android:shape="rectangle">
+            <corners android:radius="18dp" />
             <gradient android:startColor="#070B10" android:endColor="#111923" android:angle="0" />
+            <stroke android:width="2dp" android:color="#20313D" />
         </shape>
     </item>
     <item
         android:drawable="@drawable/selyro_tv_icon"
-        android:left="34dp"
-        android:top="22dp"
-        android:right="184dp"
-        android:bottom="22dp" />
+        android:width="112dp"
+        android:height="112dp"
+        android:gravity="center" />
 </layer-list>

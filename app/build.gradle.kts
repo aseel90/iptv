@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.2.6-library-ui"
+        versionCode = 8
+        versionName = "0.2.7-tv-polish"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
