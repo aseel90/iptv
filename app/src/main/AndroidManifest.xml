@@ -9,7 +9,10 @@
 
     <application
         android:allowBackup="false"
+        android:banner="@drawable/tv_banner"
         android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:label="Selyro TV"
         android:supportsRtl="true"
         android:theme="@style/Theme.Selyro"
