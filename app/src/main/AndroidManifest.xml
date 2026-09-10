@@ -11,7 +11,7 @@
     <application
         android:name=".SelyroApplication"
         android:allowBackup="false"
-        android:banner="@drawable/selyro_tv_banner"
+        android:banner="@drawable/selyro_tv_banner_asset"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
