@@ -1,4 +1,4 @@
-name: Selyro Compile Diagnostic
+name: Selyro QA Diagnostic
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -37,31 +37,40 @@ jobs:
           code=${PIPESTATUS[0]}
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Build concise root-cause report
-        if: steps.compile.outputs.exit_code != '0'
+      - name: Capture lint output
+        id: lint
+        if: steps.compile.outputs.exit_code == '0'
+        shell: bash
+        run: |
+          set +e
+          gradle :app:lintDebug --stacktrace --console=plain 2>&1 | tee /tmp/selyro-lint.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Build diagnostic report
+        if: steps.compile.outputs.exit_code != '0' || steps.lint.outputs.exit_code != '0'
         shell: bash
         run: |
           {
-            echo '### Selyro compile diagnostic — root cause'
+            echo '### Selyro QA diagnostic — root cause'
             echo '```text'
-            grep -n -E '(^e: |error:|FAILURE:|What went wrong|Could not|Unresolved reference|Compilation error|Caused by:|Exception|requires|Minimum supported|not found)' /tmp/selyro-compile.log | head -n 180 || true
-            echo ''
-            echo '--- context around Gradle failure ---'
-            line=$(grep -n -m1 '\* What went wrong:' /tmp/selyro-compile.log | cut -d: -f1 || true)
-            if [ -n "$line" ]; then
-              start=$((line > 8 ? line - 8 : 1))
-              end=$((line + 45))
-              sed -n "${start},${end}p" /tmp/selyro-compile.log
-            else
-              head -n 140 /tmp/selyro-compile.log
+            if [ "${{ steps.compile.outputs.exit_code }}" != "0" ]; then
+              echo '--- COMPILE ---'
+              grep -n -E '(^e: |error:|FAILURE:|What went wrong|Could not|Unresolved reference|Compilation error|Caused by:|Exception|requires|Minimum supported|not found)' /tmp/selyro-compile.log | head -n 180 || true
+            fi
+            if [ "${{ steps.lint.outputs.exit_code }}" != "0" ] && [ -f /tmp/selyro-lint.log ]; then
+              echo '--- LINT ---'
+              grep -n -E '(Error:|Warning:|FAILURE:|What went wrong|Caused by:|Lint found|\[.*\])' /tmp/selyro-lint.log | head -n 220 || true
+              echo '--- lint text report ---'
+              find app/build/reports -type f \( -name 'lint-results-debug.txt' -o -name 'lint-results*.txt' \) -print -exec sed -n '1,220p' {} \; 2>/dev/null || true
             fi
             echo '```'
           } > /tmp/selyro-comment.md
-      - name: Report compile failure to PR
-        if: steps.compile.outputs.exit_code != '0' && github.event_name == 'pull_request'
+      - name: Report failure to PR
+        if: (steps.compile.outputs.exit_code != '0' || steps.lint.outputs.exit_code != '0') && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/selyro-comment.md
       - name: Mark diagnostic failed
-        if: steps.compile.outputs.exit_code != '0'
+        if: steps.compile.outputs.exit_code != '0' || steps.lint.outputs.exit_code != '0'
         run: exit 1
