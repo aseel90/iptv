@@ -28,10 +28,10 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Boot Android TV and launch Selyro
+      - name: Boot Android TV 36 and launch Selyro
         uses: ReactiveCircus/android-emulator-runner@v2.38.0
         with:
-          api-level: 35
+          api-level: 36
           target: android-tv
           arch: x86_64
           cores: 2
