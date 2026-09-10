@@ -64,18 +64,18 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           mkdir -p ci-artifacts relay/selyro
           rm -f relay/selyro/apk.b64.part-*
-          cp "$APK" ci-artifacts/Selyro-TV-v0.2.5-updater.apk
+          cp "$APK" ci-artifacts/Selyro-TV-v0.2.6-library-ui.apk
           SHA=$(sha256sum "$APK" | awk '{print $1}')
-          sha256sum ci-artifacts/Selyro-TV-v0.2.5-updater.apk > ci-artifacts/Selyro-TV-v0.2.5-updater.sha256
+          sha256sum ci-artifacts/Selyro-TV-v0.2.6-library-ui.apk > ci-artifacts/Selyro-TV-v0.2.6-library-ui.sha256
           base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
           cat > relay/selyro/manifest.env <<EOF
-          VERSION_CODE=6
-          VERSION_NAME=0.2.5-updater
+          VERSION_CODE=7
+          VERSION_NAME=0.2.6-library-ui
           SHA256=$SHA
-          NOTES=Built-in one-click updates enabled
+          NOTES=Movie and series categories, responsive TV UI, and improved settings
           EOF
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ci-artifacts/Selyro-TV-v0.2.5-updater.apk ci-artifacts/Selyro-TV-v0.2.5-updater.sha256 relay/selyro
-          git commit -m 'Export stable-signed Selyro TV v0.2.5 updater base' || exit 0
+          git add ci-artifacts/Selyro-TV-v0.2.6-library-ui.apk ci-artifacts/Selyro-TV-v0.2.6-library-ui.sha256 relay/selyro
+          git commit -m 'Export stable-signed Selyro TV v0.2.6 library UI' || exit 0
           git push origin HEAD:qa/full-v1-ci
