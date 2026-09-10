@@ -48,7 +48,8 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    // Compose 1.11.x is the newest stable line compatible with compileSdk 36 / AGP 8.13.x.
+    val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
     implementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.17.0")
