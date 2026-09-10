@@ -6,14 +6,17 @@ import com.selyro.tv.model.SourceType
 import com.selyro.tv.player.StreamingProfile
 
 class AccountStore(context: Context) {
+    private val secrets = SecretStore()
     private val prefs = context.getSharedPreferences("selyro", Context.MODE_PRIVATE)
 
     fun save(account: PlaylistAccount) {
         prefs.edit()
             .putString("name", account.name)
             .putString("server", account.server.trim())
-            .putString("user", account.username)
-            .putString("pass", account.password)
+            .putString("user_enc", secrets.encrypt(account.username))
+            .putString("pass_enc", secrets.encrypt(account.password))
+            .remove("user")
+            .remove("pass")
             .putString("source_type", account.type.name)
             .apply()
     }
@@ -26,15 +29,15 @@ class AccountStore(context: Context) {
         return PlaylistAccount(
             name = prefs.getString("name", "My IPTV") ?: "My IPTV",
             server = server,
-            username = prefs.getString("user", "").orEmpty(),
-            password = prefs.getString("pass", "").orEmpty(),
+            username = secrets.decrypt(prefs.getString("user_enc", null)).ifBlank { prefs.getString("user", "").orEmpty() },
+            password = secrets.decrypt(prefs.getString("pass_enc", null)).ifBlank { prefs.getString("pass", "").orEmpty() },
             type = type
         )
     }
 
     fun clearAccount() {
         prefs.edit()
-            .remove("name").remove("server").remove("user").remove("pass").remove("source_type")
+            .remove("name").remove("server").remove("user").remove("pass").remove("user_enc").remove("pass_enc").remove("source_type")
             .apply()
     }
 
