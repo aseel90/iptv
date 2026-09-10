@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: qa/full-v1-ci
-      - name: Restore last known-good files
+      - name: Restore last known-good app files
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -24,7 +24,7 @@ jobs:
           python3 - <<'PY'
           import base64, json, os, urllib.request
           commit = 'cff23bc6d0c32e19c341f54f4e0fd755db6b5e69'
-          paths = ['app/src/main/java/com/selyro/tv/ui/SelyroApp.kt','app/build.gradle.kts','.github/workflows/qa-apk-export.yml']
+          paths = ['app/src/main/java/com/selyro/tv/ui/SelyroApp.kt','app/build.gradle.kts']
           token = os.environ['GH_TOKEN']
           for path in paths:
               url = f'https://api.github.com/repos/aseel90/iptv/contents/{path}?ref={commit}'
@@ -58,24 +58,18 @@ jobs:
           s = s.replace(heading, detail + heading, 1)
           p.write_text(s)
           PY
-      - name: Set version and export metadata
+      - name: Set version 0.2.8
         run: |
           sed -i 's/versionCode = 8/versionCode = 9/' app/build.gradle.kts
           sed -i 's/versionName = "0.2.7-tv-polish"/versionName = "0.2.8-series-hotfix"/' app/build.gradle.kts
-          sed -i 's/Selyro-TV-v0.2.7-tv-polish/Selyro-TV-v0.2.8-series-hotfix/g' .github/workflows/qa-apk-export.yml
-          sed -i 's/VERSION_CODE=8/VERSION_CODE=9/' .github/workflows/qa-apk-export.yml
-          sed -i 's/VERSION_NAME=0.2.7-tv-polish/VERSION_NAME=0.2.8-series-hotfix/' .github/workflows/qa-apk-export.yml
-          sed -i 's/Arabic RTL, multi-server profiles, grid mode, buffering indicator, exit confirmation, and TV UI polish./Urgent series opening hotfix: series details and episodes now open in grid and list modes./' .github/workflows/qa-apk-export.yml
-          sed -i 's/Export stable-signed Selyro TV v0.2.7 TV polish/Export stable-signed Selyro TV v0.2.8 series hotfix/' .github/workflows/qa-apk-export.yml
       - name: Verify hotfix files
         run: |
           grep -q 'versionCode = 9' app/build.gradle.kts
           grep -q 'openedSeriesId' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
-          grep -q 'Selyro-TV-v0.2.8-series-hotfix.apk' .github/workflows/qa-apk-export.yml
-      - name: Commit hotfix
+      - name: Commit hotfix app files
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts .github/workflows/qa-apk-export.yml
+          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts
           git commit -m 'Hotfix series navigation in Selyro TV 0.2.8' || exit 0
           git push origin HEAD:qa/full-v1-ci
