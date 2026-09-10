@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.2-internal"
+        versionCode = 4
+        versionName = "0.2.3-diagnostic"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -48,7 +48,7 @@ kotlin {
 }
 
 dependencies {
-    // Compose 1.11.x is the newest stable line compatible with compileSdk 36 / AGP 8.13.x.
+    // Compose line pinned to the newest stable set compatible with compileSdk 36 / AGP 8.13.x.
     val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
     implementation(composeBom)
 

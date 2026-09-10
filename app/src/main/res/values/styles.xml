@@ -5,7 +5,7 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowFullscreen">true</item>
-        <item name="android:windowBackground">@drawable/selyro_splash_background</item>
+        <item name="android:windowBackground">#070B10</item>
         <item name="android:colorAccent">#63D8C6</item>
         <item name="android:navigationBarColor">#070B10</item>
     </style>

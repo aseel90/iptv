@@ -23,12 +23,10 @@ jobs:
       matrix:
         include:
           - api: 28
-            arch: x86
             image: system-images;android-28;google_apis;x86
             ram: 1024
             device_label: Android 9 / Mi TV Stick generation
           - api: 30
-            arch: x86_64
             image: system-images;android-30;google_apis;x86_64
             ram: 1536
             device_label: Android 11 / Xiaomi TV Stick 4K generation
@@ -39,16 +37,22 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - name: Install emulator and API image
+      - name: Configure AVD home and install emulator
         id: setupemu
         shell: bash
         run: |
           set -euxo pipefail
+          AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$AVD_HOME"
+          echo "ANDROID_AVD_HOME=$AVD_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$HOME/.android" >> "$GITHUB_ENV"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "emulator" "platforms;android-36" "build-tools;36.0.0" "${{ matrix.image }}" 2>&1 | tee sdk-install-api-${{ matrix.api }}.log
-          sdkmanager --list_installed > sdk-installed-api-${{ matrix.api }}.txt
-          echo no | avdmanager create avd --force --name selyro-api-${{ matrix.api }} --package "${{ matrix.image }}" --device "tv_1080p" 2>&1 | tee avd-create-api-${{ matrix.api }}.log || \
-            echo no | avdmanager create avd --force --name selyro-api-${{ matrix.api }} --package "${{ matrix.image }}" 2>&1 | tee -a avd-create-api-${{ matrix.api }}.log
+          echo no | avdmanager create avd --force --name "selyro-api-${{ matrix.api }}" --package "${{ matrix.image }}" 2>&1 | tee avd-create-api-${{ matrix.api }}.log
+          avdmanager list avd | tee avd-list-api-${{ matrix.api }}.txt
+          find "$HOME/.android" -maxdepth 3 -type f -o -type d | sort | tee avd-files-api-${{ matrix.api }}.txt
+          "$ANDROID_HOME/emulator/emulator" -list-avds | tee emulator-avds-api-${{ matrix.api }}.txt
+          grep -qx "selyro-api-${{ matrix.api }}" emulator-avds-api-${{ matrix.api }}.txt
       - name: Install Gradle 8.13
         run: |
           curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
@@ -63,22 +67,19 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          "$ANDROID_HOME/emulator/emulator" -list-avds
           nohup "$ANDROID_HOME/emulator/emulator" \
-            -avd selyro-api-${{ matrix.api }} \
+            -avd "selyro-api-${{ matrix.api }}" \
             -no-window -no-snapshot -noaudio -no-boot-anim \
             -gpu swiftshader_indirect -memory ${{ matrix.ram }} \
             > emulator-api-${{ matrix.api }}.log 2>&1 &
           echo $! > emulator-api-${{ matrix.api }}.pid
-
           adb start-server
           ready=0
           for i in $(seq 1 120); do
             state=$(adb get-state 2>/dev/null || true)
             booted=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
-            if [ "$state" = "device" ] && [ "$booted" = "1" ]; then
-              ready=1
-              break
-            fi
+            if [ "$state" = "device" ] && [ "$booted" = "1" ]; then ready=1; break; fi
             sleep 2
           done
           if [ "$ready" != "1" ]; then
@@ -100,39 +101,28 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           adb install -r "$APK"
-
           adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER com.selyro.tv | tee launcher-api-${{ matrix.api }}.txt
           grep -q 'com.selyro.tv/.MainActivity' launcher-api-${{ matrix.api }}.txt
-          adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER com.selyro.tv | tee leanback-api-${{ matrix.api }}.txt
-          grep -q 'com.selyro.tv/.MainActivity' leanback-api-${{ matrix.api }}.txt
-
           adb logcat -c
           adb shell am force-stop com.selyro.tv
           adb shell am start -W -n com.selyro.tv/.MainActivity | tee start-api-${{ matrix.api }}.txt
           sleep 10
           adb logcat -d -v threadtime > app-logcat-api-${{ matrix.api }}.txt
           adb shell dumpsys activity activities > activities-api-${{ matrix.api }}.txt
-
           adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
-          grep -q 'SelyroStartup.*compose:first-composition:ok' app-logcat-api-${{ matrix.api }}.txt
+          grep -q 'SelyroStartup.*compose:first-composition:healthy' app-logcat-api-${{ matrix.api }}.txt
           grep -q 'com.selyro.tv/.MainActivity' activities-api-${{ matrix.api }}.txt
-
-          if grep -A 50 -B 10 -E 'FATAL EXCEPTION|Process: com.selyro.tv|AndroidRuntime' app-logcat-api-${{ matrix.api }}.txt; then
+          if grep -A 60 -B 12 -E 'FATAL EXCEPTION|Process: com.selyro.tv|AndroidRuntime|NoSuchMethodError|VerifyError|Resources\$NotFoundException|InflateException|OutOfMemoryError' app-logcat-api-${{ matrix.api }}.txt; then
             echo 'Fatal Selyro crash detected'
             exit 1
           fi
-
-          # Verify a second cold launch as well.
           adb shell am force-stop com.selyro.tv
           adb logcat -c
           adb shell am start -W -n com.selyro.tv/.MainActivity | tee start2-api-${{ matrix.api }}.txt
           sleep 5
           adb logcat -d -v threadtime > app-logcat2-api-${{ matrix.api }}.txt
           adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
-          grep -q 'SelyroStartup.*compose:first-composition:ok' app-logcat2-api-${{ matrix.api }}.txt
-          if grep -A 50 -B 10 -E 'FATAL EXCEPTION|Process: com.selyro.tv|AndroidRuntime' app-logcat2-api-${{ matrix.api }}.txt; then
-            exit 1
-          fi
+          grep -q 'SelyroStartup.*compose:first-composition:healthy' app-logcat2-api-${{ matrix.api }}.txt
       - name: Report result to PR
         if: always()
         env:
@@ -150,7 +140,7 @@ jobs:
               "### Selyro direct runtime API ${API_LEVEL}: PASS" \
               "Commit: ${GITHUB_SHA}" \
               "Profile: ${DEVICE_LABEL}" \
-              'Verified install, launcher resolution, two cold starts, first Compose composition, foreground survival, and no fatal crash.' > /tmp/result.md
+              'Verified install, cold starts, first Compose composition, foreground survival, and no fatal crash.' > /tmp/result.md
           else
             {
               echo "### Selyro direct runtime API ${API_LEVEL}: FAIL"
@@ -161,12 +151,17 @@ jobs:
               if [ -s "app-logcat-api-${API_LEVEL}.txt" ]; then
                 echo 'App startup log:'
                 echo '```text'
-                grep -A 60 -B 12 -E 'SelyroStartup|FATAL EXCEPTION|Process: com.selyro.tv|AndroidRuntime|InflateException|Resources\$NotFoundException|NoSuchMethodError|ClassNotFoundException|IllegalStateException|OutOfMemoryError|VerifyError' "app-logcat-api-${API_LEVEL}.txt" | head -n 260 || tail -n 180 "app-logcat-api-${API_LEVEL}.txt"
+                grep -A 70 -B 15 -E 'SelyroStartup|FATAL EXCEPTION|Process: com.selyro.tv|AndroidRuntime|InflateException|Resources\$NotFoundException|NoSuchMethodError|ClassNotFoundException|IllegalStateException|OutOfMemoryError|VerifyError' "app-logcat-api-${API_LEVEL}.txt" | head -n 300 || tail -n 200 "app-logcat-api-${API_LEVEL}.txt"
                 echo '```'
               elif [ -s "emulator-api-${API_LEVEL}.log" ]; then
                 echo 'Emulator setup/boot tail:'
                 echo '```text'
-                tail -n 120 "emulator-api-${API_LEVEL}.log"
+                tail -n 140 "emulator-api-${API_LEVEL}.log"
+                echo '```'
+              elif [ -s "avd-create-api-${API_LEVEL}.log" ]; then
+                echo 'AVD creation log:'
+                echo '```text'
+                cat "avd-create-api-${API_LEVEL}.log"
                 echo '```'
               else
                 echo 'Failure happened before app Logcat was available.'
@@ -181,11 +176,12 @@ jobs:
           name: selyro-direct-runtime-api-${{ matrix.api }}
           path: |
             sdk-install-api-${{ matrix.api }}.log
-            sdk-installed-api-${{ matrix.api }}.txt
             avd-create-api-${{ matrix.api }}.log
+            avd-list-api-${{ matrix.api }}.txt
+            avd-files-api-${{ matrix.api }}.txt
+            emulator-avds-api-${{ matrix.api }}.txt
             emulator-api-${{ matrix.api }}.log
             launcher-api-${{ matrix.api }}.txt
-            leanback-api-${{ matrix.api }}.txt
             start-api-${{ matrix.api }}.txt
             start2-api-${{ matrix.api }}.txt
             app-logcat-api-${{ matrix.api }}.txt

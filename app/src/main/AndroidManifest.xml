@@ -8,6 +8,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
+        android:name=".SelyroApplication"
         android:allowBackup="false"
         android:banner="@drawable/selyro_tv_banner"
         android:hardwareAccelerated="true"
