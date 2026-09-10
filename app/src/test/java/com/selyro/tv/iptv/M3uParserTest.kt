@@ -29,4 +29,18 @@ class M3uParserTest {
         assertEquals(1, channels.size)
         assertEquals("Valid", channels.single().name)
     }
+
+    @Test
+    fun preservesCommasInsideDisplayName() {
+        val input = "#EXTM3U\n#EXTINF:-1 tvg-id=\"cnn.us\" group-title=\"News\",CNN, US\nhttps://example.com/cnn.m3u8\n"
+        val channel = M3uParser.parse(input).single()
+        assertEquals("CNN, US", channel.name)
+    }
+
+    @Test
+    fun supportsExtGrpFallback() {
+        val input = "#EXTM3U\n#EXTINF:-1,Demo Channel\n#EXTGRP:International\nhttps://example.com/demo.ts\n"
+        val channel = M3uParser.parse(input).single()
+        assertEquals("International", channel.group)
+    }
 }
