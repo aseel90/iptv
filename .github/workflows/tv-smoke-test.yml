@@ -1,4 +1,4 @@
-name: Android TV Smoke Test
+name: Xiaomi-class Android TV Smoke Test
 
 on:
   push:
@@ -15,8 +15,23 @@ permissions:
 
 jobs:
   tv-smoke-test:
+    name: tv-smoke-api-${{ matrix.api }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 28
+            arch: x86
+            ram: 1024M
+            heap: 192
+            device_label: Android TV 9 / Mi TV Stick class
+          - api: 30
+            arch: x86
+            ram: 1536M
+            heap: 256
+            device_label: Android TV 11 / Xiaomi TV Stick 4K class
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -33,24 +48,24 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Boot Android TV 36 and verify launcher startup
+      - name: Boot TV and verify real startup
         id: tvrun
         uses: ReactiveCircus/android-emulator-runner@v2.38.0
         with:
-          api-level: 36
+          api-level: ${{ matrix.api }}
           target: android-tv
-          arch: x86_64
+          arch: ${{ matrix.arch }}
           cores: 2
-          ram-size: 1536M
-          heap-size: 256
+          ram-size: ${{ matrix.ram }}
+          heap-size: ${{ matrix.heap }}
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
             set -euxo pipefail
             capture() {
-              adb logcat -d -v threadtime > tv-smoke-logcat.txt 2>&1 || true
-              adb shell dumpsys activity activities > tv-smoke-activities.txt 2>&1 || true
-              adb shell dumpsys package com.selyro.tv > tv-smoke-package.txt 2>&1 || true
+              adb logcat -d -v threadtime > tv-smoke-logcat-api-${{ matrix.api }}.txt 2>&1 || true
+              adb shell dumpsys activity activities > tv-smoke-activities-api-${{ matrix.api }}.txt 2>&1 || true
+              adb shell dumpsys package com.selyro.tv > tv-smoke-package-api-${{ matrix.api }}.txt 2>&1 || true
             }
             trap capture EXIT
 
@@ -63,54 +78,66 @@ jobs:
             grep -q 'com.selyro.tv/.MainActivity' /tmp/leanback.txt
 
             adb logcat -c
+            adb shell am force-stop com.selyro.tv
             adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LEANBACK_LAUNCHER -p com.selyro.tv | tee /tmp/start.txt
             grep -q 'Status: ok' /tmp/start.txt
             sleep 10
 
             adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
-            adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' | grep -q 'com.selyro.tv/.MainActivity'
             adb logcat -d -v brief | grep -q 'SelyroStartup.*compose:first-composition:ok'
 
-            if adb logcat -d -v brief | grep -A 30 -B 5 -E 'FATAL EXCEPTION|Process: com.selyro.tv' ; then
+            if ! adb shell dumpsys activity activities | grep -q 'com.selyro.tv/.MainActivity'; then
+              if ! adb shell dumpsys window windows | grep -q 'com.selyro.tv'; then
+                echo 'MainActivity is not foreground/resumed after startup'
+                exit 1
+              fi
+            fi
+
+            if adb logcat -d -v brief | grep -A 35 -B 8 -E 'FATAL EXCEPTION|Process: com.selyro.tv' ; then
               echo 'Selyro crashed during TV smoke test'
               exit 1
             fi
-      - name: Report TV smoke result to PR
+      - name: Report result to PR
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           OUTCOME: ${{ steps.tvrun.outcome }}
+          API_LEVEL: ${{ matrix.api }}
+          DEVICE_LABEL: ${{ matrix.device_label }}
         run: |
           pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head qa/full-v1-ci --state open --json number --jq '.[0].number // empty')
           if [ -z "$pr" ]; then exit 0; fi
           if [ "$OUTCOME" = "success" ]; then
-            printf '%s\n%s\n%s\n' \
-              '### Android TV startup smoke: PASS' \
+            printf '%s\n%s\n%s\n%s\n' \
+              "### Android TV startup API ${API_LEVEL}: PASS" \
               "Commit: ${GITHUB_SHA}" \
-              'Verified both launcher intents, first Compose composition, 10-second resumed MainActivity survival, and no fatal app crash.' > /tmp/tv-result.md
+              "Profile: ${DEVICE_LABEL}" \
+              'Verified install, launcher intents, first Compose composition, 10-second foreground survival, and no fatal crash.' > /tmp/tv-result.md
           else
             {
-              echo '### Android TV startup smoke: FAIL'
+              echo "### Android TV startup API ${API_LEVEL}: FAIL"
               echo "Commit: ${GITHUB_SHA}"
+              echo "Profile: ${DEVICE_LABEL}"
               echo
               echo 'Relevant startup/crash log:'
               echo '```text'
-              if [ -f tv-smoke-logcat.txt ]; then
-                grep -A 45 -B 8 -E 'SelyroStartup|FATAL EXCEPTION|AndroidRuntime|Process: com.selyro.tv|InflateException|Resources\$NotFoundException|NoSuchMethodError|ClassNotFoundException|IllegalStateException|OutOfMemoryError' tv-smoke-logcat.txt | head -n 180 || tail -n 120 tv-smoke-logcat.txt
+              file="tv-smoke-logcat-api-${API_LEVEL}.txt"
+              if [ -s "$file" ]; then
+                grep -A 50 -B 10 -E 'SelyroStartup|FATAL EXCEPTION|AndroidRuntime|Process: com.selyro.tv|InflateException|Resources\$NotFoundException|NoSuchMethodError|ClassNotFoundException|IllegalStateException|OutOfMemoryError' "$file" | head -n 220 || tail -n 140 "$file"
               else
-                echo 'No logcat file was captured; emulator/setup may have failed before app launch.'
+                echo 'No app logcat was captured; emulator/system-image setup failed before Selyro could launch.'
               fi
               echo '```'
             } > /tmp/tv-result.md
           fi
           gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file /tmp/tv-result.md
-      - name: Upload TV smoke diagnostics
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: selyro-tv-smoke-diagnostics
+          name: selyro-tv-smoke-api-${{ matrix.api }}
           path: |
-            tv-smoke-logcat.txt
-            tv-smoke-activities.txt
-            tv-smoke-package.txt
+            tv-smoke-logcat-api-${{ matrix.api }}.txt
+            tv-smoke-activities-api-${{ matrix.api }}.txt
+            tv-smoke-package-api-${{ matrix.api }}.txt
           if-no-files-found: ignore
