@@ -33,22 +33,35 @@ jobs:
         shell: bash
         run: |
           set +e
-          gradle :app:compileDebugKotlin --stacktrace 2>&1 | tee /tmp/selyro-compile.log
+          gradle :app:compileDebugKotlin --stacktrace --console=plain 2>&1 | tee /tmp/selyro-compile.log
           code=${PIPESTATUS[0]}
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
+      - name: Build concise root-cause report
+        if: steps.compile.outputs.exit_code != '0'
+        shell: bash
+        run: |
+          {
+            echo '### Selyro compile diagnostic — root cause'
+            echo '```text'
+            grep -n -E '(^e: |error:|FAILURE:|What went wrong|Could not|Unresolved reference|Compilation error|Caused by:|Exception|requires|Minimum supported|not found)' /tmp/selyro-compile.log | head -n 180 || true
+            echo ''
+            echo '--- context around Gradle failure ---'
+            line=$(grep -n -m1 '\* What went wrong:' /tmp/selyro-compile.log | cut -d: -f1 || true)
+            if [ -n "$line" ]; then
+              start=$((line > 8 ? line - 8 : 1))
+              end=$((line + 45))
+              sed -n "${start},${end}p" /tmp/selyro-compile.log
+            else
+              head -n 140 /tmp/selyro-compile.log
+            fi
+            echo '```'
+          } > /tmp/selyro-comment.md
       - name: Report compile failure to PR
         if: steps.compile.outputs.exit_code != '0' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          {
-            echo '### Selyro compile diagnostic'
-            echo '```text'
-            tail -n 140 /tmp/selyro-compile.log
-            echo '```'
-          } > /tmp/selyro-comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/selyro-comment.md
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/selyro-comment.md
       - name: Mark diagnostic failed
         if: steps.compile.outputs.exit_code != '0'
         run: exit 1
