@@ -1,0 +1,35 @@
+name: Fix Selyro UI compile
+
+on:
+  push:
+    branches: ['qa/full-v1-ci']
+    paths:
+      - '.github/workflows/fix-selyro-ui-compile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qa/full-v1-ci
+      - name: Patch Compose call sites
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/selyro/tv/ui/SelyroApp.kt')
+          s = p.read_text()
+          s = s.replace('LazyVerticalGrid(GridCells.Adaptive(150.dp), Modifier.weight(1f), PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(9.dp))', 'LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(9.dp))')
+          s = s.replace('LazyVerticalGrid(GridCells.Adaptive(145.dp), Modifier.weight(1f), PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(11.dp))', 'LazyVerticalGrid(columns = GridCells.Adaptive(145.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(11.dp))')
+          s = s.replace('p.title.ifBlank { tx("Program", "برنامج") }', 'if (p.title.isBlank()) tx("Program", "برنامج") else p.title')
+          p.write_text(s)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          git commit -m 'Fix Compose grid and translation call sites' || exit 0
+          git push origin HEAD:qa/full-v1-ci

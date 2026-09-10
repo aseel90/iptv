@@ -1,0 +1,31 @@
+name: Recover Selyro files
+
+on:
+  push:
+    paths:
+      - '.github/workflows/recover-series-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qa/full-v1-ci
+          fetch-depth: 0
+      - name: Restore last known-good 0.2.7 files
+        run: |
+          git show cff23bc6d0c32e19c341f54f4e0fd755db6b5e69:app/src/main/java/com/selyro/tv/ui/SelyroApp.kt > app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          git show cff23bc6d0c32e19c341f54f4e0fd755db6b5e69:app/build.gradle.kts > app/build.gradle.kts
+          git show cff23bc6d0c32e19c341f54f4e0fd755db6b5e69:.github/workflows/qa-apk-export.yml > .github/workflows/qa-apk-export.yml
+      - name: Commit recovery
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts .github/workflows/qa-apk-export.yml
+          git commit -m 'Recover Selyro files to last good 0.2.7' || exit 0
+          git push origin HEAD:qa/full-v1-ci

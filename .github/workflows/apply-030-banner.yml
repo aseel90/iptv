@@ -1,0 +1,39 @@
+name: Apply Selyro 0.3 TV banner assets
+
+on:
+  push:
+    branches: [release/0.3.0-ui-refresh-final]
+    paths: [tools/apply_banner030.py]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.0-ui-refresh-final
+          fetch-depth: 0
+      - name: Generate localized 320x180 xhdpi TV banners
+        run: python3 tools/apply_banner030.py
+      - name: Validate banner dimensions
+        run: |
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+          for path in [Path('app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png'), Path('app/src/main/res/drawable-ar-xhdpi/selyro_tv_banner_asset.png')]:
+              data = path.read_bytes()
+              width, height = struct.unpack('>II', data[16:24])
+              assert (width, height) == (320, 180), (path, width, height)
+          PY
+      - name: Commit generated TV assets
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/AndroidManifest.xml app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png app/src/main/res/drawable-ar-xhdpi/selyro_tv_banner_asset.png
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'feat(tv): add localized 320x180 Selyro launcher banners'
+          git push origin HEAD:release/0.3.0-ui-refresh-final

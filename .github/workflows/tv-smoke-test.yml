@@ -1,0 +1,164 @@
+name: Selyro Direct Android Runtime Smoke
+
+on:
+  push:
+    branches:
+      - 'qa/full-v1-ci'
+    paths-ignore:
+      - 'ci-artifacts/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  runtime-smoke:
+    name: direct-runtime-api-${{ matrix.api }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 28
+            image: system-images;android-28;google_apis;x86
+            ram: 1024
+            label: Android 9 / Mi TV Stick generation
+          - api: 30
+            image: system-images;android-30;google_apis;x86_64
+            ram: 1536
+            label: Android 11 / Xiaomi TV Stick 4K generation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+
+      - name: Install emulator and create AVD
+        id: setupemu
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "emulator" "platforms;android-36" "build-tools;36.0.0" "${{ matrix.image }}"
+          echo no | avdmanager create avd --force --name "selyro-api-${{ matrix.api }}" --package "${{ matrix.image }}" --device tv_1080p
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -qx "selyro-api-${{ matrix.api }}"
+
+      - name: Install Gradle 8.13
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+
+      - name: Enable KVM
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+          ls -l /dev/kvm || true
+
+      - name: Boot emulator
+        id: boot
+        shell: bash
+        run: |
+          set -euxo pipefail
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd "selyro-api-${{ matrix.api }}" \
+            -no-window -no-snapshot -noaudio -no-boot-anim \
+            -gpu swiftshader_indirect -memory ${{ matrix.ram }} \
+            > "emulator-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "emulator-api-${{ matrix.api }}.pid"
+          adb start-server
+          ready=0
+          for i in $(seq 1 120); do
+            state=$(adb get-state 2>/dev/null || true)
+            booted=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+            if [ "$state" = device ] && [ "$booted" = 1 ]; then ready=1; break; fi
+            sleep 2
+          done
+          if [ "$ready" != 1 ]; then
+            tail -n 180 "emulator-api-${{ matrix.api }}.log" || true
+            exit 1
+          fi
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
+
+      - name: Build install and run twice
+        id: appsmoke
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gradle :app:assembleDebug --stacktrace
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          adb install -r "$APK"
+
+          for run in 1 2; do
+            adb shell am force-stop com.selyro.tv
+            adb logcat -c
+            adb shell am start -W -n com.selyro.tv/.MainActivity | tee "start-${run}-api-${{ matrix.api }}.txt"
+            sleep 8
+            adb logcat -d -v threadtime > "logcat-${run}-api-${{ matrix.api }}.txt"
+            adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
+            grep -q 'SelyroStartup.*compose:first-composition:healthy' "logcat-${run}-api-${{ matrix.api }}.txt"
+            if [ "$run" = "1" ]; then
+              adb shell uiautomator dump /sdcard/selyro-ui.xml >/dev/null
+              adb pull /sdcard/selyro-ui.xml "ui-api-${{ matrix.api }}.xml" >/dev/null
+              python -c 'import sys, xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]).getroot(); buttons=[n for n in root.iter() if n.attrib.get("text")=="CONNECT"]; assert buttons, "CONNECT button is not present in the visible login UI"; assert any(n.attrib.get("visible-to-user","true")!="false" for n in buttons), "CONNECT button exists but is not visible to the user"; print("CONNECT button visible in Android UI hierarchy")' "ui-api-${{ matrix.api }}.xml"
+            fi
+            if grep -qE 'FATAL EXCEPTION|Process: com.selyro.tv.*has died|NoSuchMethodError|VerifyError|OutOfMemoryError' "logcat-${run}-api-${{ matrix.api }}.txt"; then
+              grep -A 80 -B 20 -E 'FATAL EXCEPTION|Process: com.selyro.tv|SelyroStartup|NoSuchMethodError|VerifyError|OutOfMemoryError' "logcat-${run}-api-${{ matrix.api }}.txt" || true
+              exit 1
+            fi
+          done
+
+      - name: Report result to PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SETUP: ${{ steps.setupemu.outcome }}
+          BOOT: ${{ steps.boot.outcome }}
+          APP: ${{ steps.appsmoke.outcome }}
+          API: ${{ matrix.api }}
+          LABEL: ${{ matrix.label }}
+        shell: bash
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head qa/full-v1-ci --state open --json number --jq '.[0].number // empty')
+          [ -n "$pr" ] || exit 0
+          {
+            if [ "$APP" = success ]; then
+              echo "### Selyro runtime API ${API}: PASS"
+              echo "Profile: ${LABEL}"
+              echo 'Two cold starts survived, Compose reached healthy state, CONNECT is visible, and no fatal exception occurred.'
+            else
+              echo "### Selyro runtime API ${API}: FAIL"
+              echo "Profile: ${LABEL}"
+              echo "Setup=${SETUP} Boot=${BOOT} App=${APP}"
+              latest=$(ls logcat-*-api-${API}.txt 2>/dev/null | tail -n 1 || true)
+              echo '```text'
+              if [ -n "$latest" ]; then
+                grep -A 90 -B 25 -E 'SelyroStartup|FATAL EXCEPTION|Process: com.selyro.tv|AndroidRuntime|NoSuchMethodError|ClassNotFoundException|VerifyError|InflateException|Resources\$NotFoundException|OutOfMemoryError' "$latest" | head -n 360 || tail -n 220 "$latest"
+              elif [ -s "emulator-api-${API}.log" ]; then
+                tail -n 180 "emulator-api-${API}.log"
+              else
+                echo 'No runtime log was produced.'
+              fi
+              echo '```'
+            fi
+          } > /tmp/result.md
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file /tmp/result.md
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selyro-runtime-api-${{ matrix.api }}
+          path: |
+            emulator-api-${{ matrix.api }}.log
+            start-*-api-${{ matrix.api }}.txt
+            logcat-*-api-${{ matrix.api }}.txt
+            ui-api-${{ matrix.api }}.xml
+          if-no-files-found: ignore

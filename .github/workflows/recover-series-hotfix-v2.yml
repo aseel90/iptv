@@ -1,0 +1,75 @@
+name: Recover and patch Selyro series v2
+
+on:
+  push:
+    paths:
+      - '.github/workflows/recover-series-hotfix-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: qa/full-v1-ci
+      - name: Restore last known-good app files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+          commit = 'cff23bc6d0c32e19c341f54f4e0fd755db6b5e69'
+          paths = ['app/src/main/java/com/selyro/tv/ui/SelyroApp.kt','app/build.gradle.kts']
+          token = os.environ['GH_TOKEN']
+          for path in paths:
+              url = f'https://api.github.com/repos/aseel90/iptv/contents/{path}?ref={commit}'
+              req = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}','Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})
+              with urllib.request.urlopen(req) as r:
+                  data = json.load(r)
+              content = base64.b64decode(data['content'])
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              open(path,'wb').write(content)
+          PY
+      - name: Apply series navigation fix
+        run: |
+          python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          p = Path('app/src/main/java/com/selyro/tv/ui/SelyroApp.kt')
+          s = p.read_text()
+          old_state = 'var selected by remember { mutableStateOf<SeriesItem?>(null) }; val categories'
+          new_state = 'var selected by remember { mutableStateOf<SeriesItem?>(null) }; var openedSeriesId by remember { mutableStateOf<String?>(null) }; val categories'
+          if old_state not in s:
+              raise SystemExit('series state anchor missing')
+          s = s.replace(old_state, new_state, 1)
+          old_click = '{ selected = item; vm.loadSeriesDetails(item) }'
+          if s.count(old_click) < 2:
+              raise SystemExit(f'expected two series click handlers, found {s.count(old_click)}')
+          s = s.replace(old_click, '{ selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) }', 2)
+          heading = '\n    Heading(tx("Series", "المسلسلات"),'
+          if heading not in s:
+              raise SystemExit('series heading anchor missing')
+          detail = base64.b64decode('CiAgICB2YWwgb3BlbmVkU2VyaWVzID0gc2VsZWN0ZWQ/LnRha2VJZiB7IGl0LmlkID09IG9wZW5lZFNlcmllc0lkIH0KICAgIGlmIChvcGVuZWRTZXJpZXMgIT0gbnVsbCkgewogICAgICAgIEJhY2tIYW5kbGVyIHsgb3BlbmVkU2VyaWVzSWQgPSBudWxsOyBzZWxlY3RlZCA9IG51bGw7IHZtLmNsZWFyU2VyaWVzRGV0YWlscygpIH0KICAgICAgICBIZWFkaW5nKG9wZW5lZFNlcmllcy5uYW1lLCBsaXN0T2ZOb3ROdWxsKG9wZW5lZFNlcmllcy55ZWFyLCBvcGVuZWRTZXJpZXMuY2F0ZWdvcnkpLmZpbHRlciB7IGl0LmlzTm90QmxhbmsoKSB9LmpvaW5Ub1N0cmluZygiIOKAoiAiKSkKICAgICAgICBSb3coTW9kaWZpZXIuZmlsbE1heFdpZHRoKCksIGhvcml6b250YWxBcnJhbmdlbWVudCA9IEFycmFuZ2VtZW50LnNwYWNlZEJ5KDE0LmRwKSwgdmVydGljYWxBbGlnbm1lbnQgPSBBbGlnbm1lbnQuVG9wKSB7CiAgICAgICAgICAgIEFzeW5jSW1hZ2Uob3BlbmVkU2VyaWVzLnBvc3Rlciwgb3BlbmVkU2VyaWVzLm5hbWUsIE1vZGlmaWVyLndpZHRoKDEyMC5kcCkuaGVpZ2h0KDE3MC5kcCkuY2xpcChSb3VuZGVkQ29ybmVyU2hhcGUoMTEuZHApKS5iYWNrZ3JvdW5kKENvbG9yKDB4RkYxOTIzMkQpKSwgY29udGVudFNjYWxlID0gQ29udGVudFNjYWxlLkNyb3ApCiAgICAgICAgICAgIENvbHVtbihNb2RpZmllci53ZWlnaHQoMWYpKSB7CiAgICAgICAgICAgICAgICBpZiAoIW9wZW5lZFNlcmllcy5wbG90LmlzTnVsbE9yQmxhbmsoKSkgVGV4dChvcGVuZWRTZXJpZXMucGxvdC5vckVtcHR5KCksIGNvbG9yID0gTXV0ZWQsIGZvbnRTaXplID0gMTMuc3AsIG1heExpbmVzID0gNSkKICAgICAgICAgICAgICAgIFNwYWNlcihNb2RpZmllci5oZWlnaHQoMTAuZHApKQogICAgICAgICAgICAgICAgVHZCdXR0b24odHgoIkJBQ0sgVE8gU0VSSUVTIiwgItin2YTYudmI2K/YqSDZhNmE2YXYs9mE2LPZhNin2KoiKSwgdHJ1ZSkgeyBvcGVuZWRTZXJpZXNJZCA9IG51bGw7IHNlbGVjdGVkID0gbnVsbDsgdm0uY2xlYXJTZXJpZXNEZXRhaWxzKCkgfQogICAgICAgICAgICB9CiAgICAgICAgfQogICAgICAgIFNwYWNlcihNb2RpZmllci5oZWlnaHQoMTQuZHApKQogICAgICAgIFRleHQodHgoIkVwaXNvZGVzIiwgItin2YTYrdmE2YLYp9iqIiksIGNvbG9yID0gQ29sb3IuV2hpdGUsIGZvbnRTaXplID0gMjAuc3AsIGZvbnRXZWlnaHQgPSBGb250V2VpZ2h0LkJvbGQpCiAgICAgICAgU3BhY2VyKE1vZGlmaWVyLmhlaWdodCg4LmRwKSkKICAgICAgICB2YWwgb3BlbmVkRXBpc29kZXMgPSBkZXRhaWxzPy50YWtlSWYgeyBpdC5zZXJpZXMuaWQgPT0gb3BlbmVkU2VyaWVzLmlkIH0/LmVwaXNvZGVzLm9yRW1wdHkoKQogICAgICAgIHdoZW4gewogICAgICAgICAgICBsb2FkaW5nID09ICJFcGlzb2RlcyIgLT4gTG9hZGluZ0JveCh0eCgiTG9hZGluZyBlcGlzb2Rlc+KApiIsICLYrNin2LHZiiDYqtit2YXZitmEINin2YTYrdmE2YLYp9iq4oCmIikpCiAgICAgICAgICAgIG9wZW5lZEVwaXNvZGVzLmlzRW1wdHkoKSAtPiBDb2x1bW4geyBUZXh0KHR4KCJObyBlcGlzb2RlcyByZXR1cm5lZCIsICLZhNmFINmK2KrZhSDYp9mE2LnYq9mI2LEg2LnZhNmJINit2YTZgtin2KoiKSwgY29sb3IgPSBNdXRlZCk7IFNwYWNlcihNb2RpZmllci5oZWlnaHQoMTAuZHApKTsgVHZCdXR0b24odHgoIlJFVFJZIiwgItil2LnYp9iv2Kkg2KfZhNmF2K3Yp9mI2YTYqSIpLCB0cnVlKSB7IHZtLmxvYWRTZXJpZXNEZXRhaWxzKG9wZW5lZFNlcmllcykgfSB9CiAgICAgICAgICAgIGVsc2UgLT4gTGF6eUNvbHVtbihNb2RpZmllci5maWxsTWF4U2l6ZSgpLCB2ZXJ0aWNhbEFycmFuZ2VtZW50ID0gQXJyYW5nZW1lbnQuc3BhY2VkQnkoNi5kcCkpIHsgaXRlbXMob3BlbmVkRXBpc29kZXMsIGtleSA9IHsgaXQuaWQgfSkgeyBlcCAtPiBUdkxpc3RJdGVtKCJTJHtlcC5zZWFzb259IEUke2VwLmVwaXNvZGV9ICAke2VwLnRpdGxlfSIsIGVwLmR1cmF0aW9uLm9yRW1wdHkoKSkgeyBvblBsYXkoUGxheVJlcXVlc3QoImVwaXNvZGUiLCBlcC5pZCwgZXAudGl0bGUsIGVwLnN0cmVhbVVybCkpIH0gfSB9CiAgICAgICAgfQogICAgICAgIHJldHVybgogICAgfQo=').decode()
+          s = s.replace(heading, detail + heading, 1)
+          p.write_text(s)
+          PY
+      - name: Set version 0.2.8
+        run: |
+          sed -i 's/versionCode = 8/versionCode = 9/' app/build.gradle.kts
+          sed -i 's/versionName = "0.2.7-tv-polish"/versionName = "0.2.8-series-hotfix"/' app/build.gradle.kts
+      - name: Verify hotfix files
+        run: |
+          grep -q 'versionCode = 9' app/build.gradle.kts
+          grep -q 'openedSeriesId' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+      - name: Commit hotfix app files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts
+          git commit -m 'Hotfix series navigation in Selyro TV 0.2.8' || exit 0
+          git push origin HEAD:qa/full-v1-ci
