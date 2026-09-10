@@ -107,17 +107,7 @@ jobs:
             if [ "$run" = "1" ]; then
               adb shell uiautomator dump /sdcard/selyro-ui.xml >/dev/null
               adb pull /sdcard/selyro-ui.xml "ui-api-${{ matrix.api }}.xml" >/dev/null
-              python - "ui-api-${{ matrix.api }}.xml" <<'PYUI'
-import sys
-import xml.etree.ElementTree as ET
-root = ET.parse(sys.argv[1]).getroot()
-buttons = [node for node in root.iter() if node.attrib.get("text") == "CONNECT"]
-if not buttons:
-    raise SystemExit("CONNECT button is not present in the visible login UI")
-if all(node.attrib.get("visible-to-user", "true") == "false" for node in buttons):
-    raise SystemExit("CONNECT button exists but is not visible to the user")
-print("CONNECT button visible in Android UI hierarchy")
-PYUI
+              python -c 'import sys, xml.etree.ElementTree as ET; root=ET.parse(sys.argv[1]).getroot(); buttons=[n for n in root.iter() if n.attrib.get("text")=="CONNECT"]; assert buttons, "CONNECT button is not present in the visible login UI"; assert any(n.attrib.get("visible-to-user","true")!="false" for n in buttons), "CONNECT button exists but is not visible to the user"; print("CONNECT button visible in Android UI hierarchy")' "ui-api-${{ matrix.api }}.xml"
             fi
             if grep -qE 'FATAL EXCEPTION|Process: com.selyro.tv.*has died|NoSuchMethodError|VerifyError|OutOfMemoryError' "logcat-${run}-api-${{ matrix.api }}.txt"; then
               grep -A 80 -B 20 -E 'FATAL EXCEPTION|Process: com.selyro.tv|SelyroStartup|NoSuchMethodError|VerifyError|OutOfMemoryError' "logcat-${run}-api-${{ matrix.api }}.txt" || true
