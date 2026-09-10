@@ -2,8 +2,10 @@ name: Selyro Direct Android Runtime Smoke
 
 on:
   push:
-    branches: ['qa/full-v1-ci']
-    paths-ignore: ['ci-artifacts/**']
+    branches:
+      - 'qa/full-v1-ci'
+    paths-ignore:
+      - 'ci-artifacts/**'
   workflow_dispatch:
 
 permissions:
@@ -36,27 +38,15 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
 
-      - name: Install SDK and create AVD
+      - name: Install emulator and create AVD
         id: setupemu
         shell: bash
         run: |
           set -euxo pipefail
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
-          export ANDROID_USER_HOME="$HOME/.android"
-          mkdir -p "$ANDROID_AVD_HOME"
-          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
-          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "emulator" "platforms;android-36" "build-tools;36.0.0" "${{ matrix.image }}"
-          printf 'no\n' | avdmanager create avd --force \
-            --name "selyro-api-${{ matrix.api }}" \
-            --package "${{ matrix.image }}" \
-            --device "pixel_2"
-          echo '--- avdmanager list ---'
-          avdmanager list avd
-          echo '--- emulator list ---'
-          "$ANDROID_HOME/emulator/emulator" -list-avds | tee emulator-avds-api-${{ matrix.api }}.txt
-          grep -qx "selyro-api-${{ matrix.api }}" emulator-avds-api-${{ matrix.api }}.txt
+          echo no | avdmanager create avd --force --name "selyro-api-${{ matrix.api }}" --package "${{ matrix.image }}" --device tv_1080p
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -qx "selyro-api-${{ matrix.api }}"
 
       - name: Install Gradle 8.13
         run: |
@@ -64,30 +54,39 @@ jobs:
           unzip -q /tmp/gradle.zip -d /tmp
           echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
 
+      - name: Enable KVM
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+          ls -l /dev/kvm || true
+
       - name: Boot emulator
         id: boot
         shell: bash
         run: |
           set -euxo pipefail
-          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
           nohup "$ANDROID_HOME/emulator/emulator" \
             -avd "selyro-api-${{ matrix.api }}" \
             -no-window -no-snapshot -noaudio -no-boot-anim \
             -gpu swiftshader_indirect -memory ${{ matrix.ram }} \
-            > emulator-api-${{ matrix.api }}.log 2>&1 &
+            > "emulator-api-${{ matrix.api }}.log" 2>&1 &
+          echo $! > "emulator-api-${{ matrix.api }}.pid"
           adb start-server
+          ready=0
           for i in $(seq 1 120); do
-            if [ "$(adb get-state 2>/dev/null || true)" = "device" ] && \
-               [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)" = "1" ]; then
-              adb shell getprop ro.build.version.release
-              exit 0
-            fi
+            state=$(adb get-state 2>/dev/null || true)
+            booted=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+            if [ "$state" = device ] && [ "$booted" = 1 ]; then ready=1; break; fi
             sleep 2
           done
-          tail -n 200 emulator-api-${{ matrix.api }}.log || true
-          exit 1
+          if [ "$ready" != 1 ]; then
+            tail -n 180 "emulator-api-${{ matrix.api }}.log" || true
+            exit 1
+          fi
+          adb shell settings put global window_animation_scale 0 || true
+          adb shell settings put global transition_animation_scale 0 || true
+          adb shell settings put global animator_duration_scale 0 || true
 
-      - name: Build install and cold-launch twice
+      - name: Build install and run twice
         id: appsmoke
         shell: bash
         run: |
@@ -105,6 +104,21 @@ jobs:
             adb logcat -d -v threadtime > "logcat-${run}-api-${{ matrix.api }}.txt"
             adb shell pidof com.selyro.tv | grep -Eq '[0-9]+'
             grep -q 'SelyroStartup.*compose:first-composition:healthy' "logcat-${run}-api-${{ matrix.api }}.txt"
+            if [ "$run" = "1" ]; then
+              adb shell uiautomator dump /sdcard/selyro-ui.xml >/dev/null
+              adb pull /sdcard/selyro-ui.xml "ui-api-${{ matrix.api }}.xml" >/dev/null
+              python - "ui-api-${{ matrix.api }}.xml" <<'PYUI'
+import sys
+import xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+buttons = [node for node in root.iter() if node.attrib.get("text") == "CONNECT"]
+if not buttons:
+    raise SystemExit("CONNECT button is not present in the visible login UI")
+if all(node.attrib.get("visible-to-user", "true") == "false" for node in buttons):
+    raise SystemExit("CONNECT button exists but is not visible to the user")
+print("CONNECT button visible in Android UI hierarchy")
+PYUI
+            fi
             if grep -qE 'FATAL EXCEPTION|Process: com.selyro.tv.*has died|NoSuchMethodError|VerifyError|OutOfMemoryError' "logcat-${run}-api-${{ matrix.api }}.txt"; then
               grep -A 80 -B 20 -E 'FATAL EXCEPTION|Process: com.selyro.tv|SelyroStartup|NoSuchMethodError|VerifyError|OutOfMemoryError' "logcat-${run}-api-${{ matrix.api }}.txt" || true
               exit 1
@@ -128,7 +142,7 @@ jobs:
             if [ "$APP" = success ]; then
               echo "### Selyro runtime API ${API}: PASS"
               echo "Profile: ${LABEL}"
-              echo 'Two cold starts survived and Compose reached healthy state without a fatal exception.'
+              echo 'Two cold starts survived, Compose reached healthy state, CONNECT is visible, and no fatal exception occurred.'
             else
               echo "### Selyro runtime API ${API}: FAIL"
               echo "Profile: ${LABEL}"
@@ -153,8 +167,8 @@ jobs:
         with:
           name: selyro-runtime-api-${{ matrix.api }}
           path: |
-            emulator-avds-api-${{ matrix.api }}.txt
             emulator-api-${{ matrix.api }}.log
             start-*-api-${{ matrix.api }}.txt
             logcat-*-api-${{ matrix.api }}.txt
+            ui-api-${{ matrix.api }}.xml
           if-no-files-found: ignore

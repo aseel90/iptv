@@ -46,10 +46,10 @@ jobs:
       - name: Export APK to QA branch
         run: |
           mkdir -p ci-artifacts
-          cp app/build/outputs/apk/debug/app-debug.apk ci-artifacts/Selyro-TV-v0.2.3-diagnostic.apk
-          sha256sum ci-artifacts/Selyro-TV-v0.2.3-diagnostic.apk > ci-artifacts/Selyro-TV-v0.2.3-diagnostic.sha256
+          cp app/build/outputs/apk/debug/app-debug.apk ci-artifacts/Selyro-TV-v0.2.4-login-ui.apk
+          sha256sum ci-artifacts/Selyro-TV-v0.2.4-login-ui.apk > ci-artifacts/Selyro-TV-v0.2.4-login-ui.sha256
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ci-artifacts/Selyro-TV-v0.2.3-diagnostic.apk ci-artifacts/Selyro-TV-v0.2.3-diagnostic.sha256
-          git commit -m 'Export Selyro TV v0.2.3 diagnostic APK' || exit 0
+          git add ci-artifacts/Selyro-TV-v0.2.4-login-ui.apk ci-artifacts/Selyro-TV-v0.2.4-login-ui.sha256
+          git commit -m 'Export Selyro TV v0.2.4 login UI APK' || exit 0
           git push origin HEAD:qa/full-v1-ci

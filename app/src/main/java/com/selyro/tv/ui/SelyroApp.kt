@@ -94,43 +94,48 @@ private fun LoginScreen(vm: AppViewModel) {
 
     Row(Modifier.fillMaxSize()) {
         Column(
-            Modifier.width(360.dp).fillMaxHeight().background(Rail).padding(42.dp),
+            Modifier.width(300.dp).fillMaxHeight().background(Rail).padding(28.dp),
             verticalArrangement = Arrangement.Center
         ) {
-            Text("SELYRO", color = Accent, fontSize = 42.sp, fontWeight = FontWeight.Bold)
-            Text("TV", color = Muted, fontSize = 18.sp)
-            Spacer(Modifier.height(24.dp))
-            Text("Fast IPTV for Android TV", color = Color.White, fontSize = 21.sp)
-            Spacer(Modifier.height(10.dp))
-            Text("Optimized for remote control and low-power TV sticks.", color = Muted, fontSize = 15.sp)
+            Text("SELYRO", color = Accent, fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            Text("TV", color = Muted, fontSize = 16.sp)
+            Spacer(Modifier.height(16.dp))
+            Text("Fast IPTV for Android TV", color = Color.White, fontSize = 18.sp)
+            Spacer(Modifier.height(7.dp))
+            Text("Optimized for remote control and low-power TV sticks.", color = Muted, fontSize = 13.sp)
         }
         Column(
-            Modifier.weight(1f).fillMaxHeight().padding(horizontal = 72.dp, vertical = 50.dp),
+            Modifier.weight(1f).fillMaxHeight().padding(horizontal = 40.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.Center
         ) {
-            Text("Connect a provider", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(22.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Connect a provider", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 TvButton("Xtream Codes", type == SourceType.XTREAM) { type = SourceType.XTREAM }
                 TvButton("M3U URL", type == SourceType.M3U) { type = SourceType.M3U }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(10.dp))
             TvInput("Playlist name", name) { name = it }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(7.dp))
             TvInput(if (type == SourceType.XTREAM) "Server URL" else "M3U playlist URL", server) { server = it }
             if (type == SourceType.XTREAM) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(7.dp))
                 TvInput("Username", username) { username = it }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(7.dp))
                 TvInput("Password", password, password = true) { password = it }
             }
-            Spacer(Modifier.height(20.dp))
-            TvButton(if (loading) "Connecting…" else "Connect", true, enabled = !loading && server.isNotBlank()) {
-                vm.login(PlaylistAccount(name.ifBlank { "My IPTV" }, server, username, password, type))
-            }
             if (!error.isNullOrBlank()) {
-                Spacer(Modifier.height(14.dp))
-                Text(error.orEmpty(), color = Danger, fontSize = 15.sp)
+                Spacer(Modifier.height(8.dp))
+                Text(error.orEmpty(), color = Danger, fontSize = 13.sp, maxLines = 2)
+            }
+            Spacer(Modifier.height(12.dp))
+            TvButton(
+                if (loading) "CONNECTING…" else "CONNECT",
+                selected = true,
+                enabled = !loading && server.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                vm.login(PlaylistAccount(name.ifBlank { "My IPTV" }, server, username, password, type))
             }
         }
     }
@@ -431,13 +436,19 @@ private fun SettingsScreen(vm: AppViewModel) {
     }
 }
 
-@Composable private fun TvButton(label: String, selected: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+@Composable private fun TvButton(
+    label: String,
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     var focused by remember { mutableStateOf(false) }
     val background = when { !enabled -> Color(0xFF171C22); focused -> Accent; selected -> Color(0xFF275A54); else -> Panel }
     Box(
-        Modifier.clip(RoundedCornerShape(10.dp)).background(background)
+        modifier.clip(RoundedCornerShape(10.dp)).background(background)
             .onFocusChanged { focused = it.isFocused }.clickable(enabled = enabled, onClick = onClick).focusable(enabled)
-            .padding(horizontal = 17.dp, vertical = 11.dp)
+            .padding(horizontal = 17.dp, vertical = 10.dp)
     ) { Text(label, color = if (focused) Color.Black else if (enabled) Color.White else Color.DarkGray, fontWeight = FontWeight.SemiBold) }
 }
 
@@ -452,9 +463,9 @@ private fun SettingsScreen(vm: AppViewModel) {
             textStyle = TextStyle(color = Color.White, fontSize = 17.sp),
             singleLine = true,
             visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-            modifier = Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp)).background(Panel)
+            modifier = Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(10.dp)).background(Panel)
                 .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF26313C), RoundedCornerShape(10.dp))
-                .onFocusChanged { focused = it.isFocused }.padding(horizontal = 14.dp, vertical = 13.dp)
+                .onFocusChanged { focused = it.isFocused }.padding(horizontal = 14.dp, vertical = 10.dp)
         )
     }
 }
