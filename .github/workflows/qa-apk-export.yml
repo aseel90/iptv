@@ -2,11 +2,10 @@ name: Export QA APK
 
 on:
   push:
-    branches:
-      - 'qa/full-v1-ci'
+    branches: ['qa/full-v1-ci']
     paths-ignore:
       - 'ci-artifacts/**'
-      - 'update/**'
+      - 'relay/**'
   workflow_dispatch:
 
 permissions:
@@ -36,34 +35,47 @@ jobs:
         run: |
           gradle :app:testDebugUnitTest :app:assembleDebug --stacktrace
           test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Re-sign with stable Selyro QA test key
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/master/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/master/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          $ANDROID_HOME/build-tools/36.0.0/apksigner sign \
+            --key /tmp/selyro-testkey.pk8 \
+            --cert /tmp/selyro-testkey.x509.pem \
+            --out /tmp/Selyro-TV-signed.apk \
+            "$APK"
+          mv /tmp/Selyro-TV-signed.apk "$APK"
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK" | tee /tmp/apk-signer.txt
+          grep -q 'Signer #1 certificate SHA-256 digest:' /tmp/apk-signer.txt
       - name: Verify APK identity and launchability
         run: |
           set -euxo pipefail
-          $ANDROID_HOME/build-tools/36.0.0/aapt dump badging app/build/outputs/apk/debug/app-debug.apk | tee /tmp/apk-badging.txt
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK" | tee /tmp/apk-badging.txt
           grep -q "package: name='com.selyro.tv'" /tmp/apk-badging.txt
           grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
           grep -q "launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
           grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
-      - name: Publish stable update channel
+      - name: Export updater base and relay chunks
         run: |
           set -euxo pipefail
-          mkdir -p ci-artifacts update
           APK=app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p ci-artifacts relay/selyro
+          rm -f relay/selyro/apk.b64.part-*
           cp "$APK" ci-artifacts/Selyro-TV-v0.2.5-updater.apk
-          cp "$APK" update/Selyro-TV-latest.apk
-          SHA=$(sha256sum update/Selyro-TV-latest.apk | awk '{print $1}')
-          printf '%s  %s\n' "$SHA" 'Selyro-TV-latest.apk' > update/Selyro-TV-latest.sha256
-          cat > update/latest.json <<EOF
-          {
-            "versionCode": 6,
-            "versionName": "0.2.5-updater",
-            "apkUrl": "https://raw.githubusercontent.com/aseel90/iptv/qa/full-v1-ci/update/Selyro-TV-latest.apk",
-            "sha256": "$SHA",
-            "notes": "Built-in one-click update downloads are now enabled."
-          }
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          sha256sum ci-artifacts/Selyro-TV-v0.2.5-updater.apk > ci-artifacts/Selyro-TV-v0.2.5-updater.sha256
+          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
+          cat > relay/selyro/manifest.env <<EOF
+          VERSION_CODE=6
+          VERSION_NAME=0.2.5-updater
+          SHA256=$SHA
+          NOTES=Built-in one-click updates enabled
           EOF
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add ci-artifacts/Selyro-TV-v0.2.5-updater.apk update/Selyro-TV-latest.apk update/Selyro-TV-latest.sha256 update/latest.json
-          git commit -m 'Publish Selyro TV v0.2.5 updater APK' || exit 0
+          git add ci-artifacts/Selyro-TV-v0.2.5-updater.apk ci-artifacts/Selyro-TV-v0.2.5-updater.sha256 relay/selyro
+          git commit -m 'Export stable-signed Selyro TV v0.2.5 updater base' || exit 0
           git push origin HEAD:qa/full-v1-ci

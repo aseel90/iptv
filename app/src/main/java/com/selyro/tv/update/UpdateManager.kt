@@ -36,7 +36,7 @@ sealed interface UpdateStatus {
 }
 
 object UpdateManager {
-    const val CHANNEL_URL = "https://raw.githubusercontent.com/aseel90/iptv/qa/full-v1-ci/update/latest.json"
+    const val CHANNEL_URL = "https://raw.githubusercontent.com/aseel90/FeatherFury-LaB/main/selyro-updates/latest.json"
 
     suspend fun check(): UpdateStatus = withContext(Dispatchers.IO) {
         runCatching {
@@ -67,13 +67,18 @@ object UpdateManager {
 
     fun openInstallPermission(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
+            context.startActivity(
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
         }
     }
 
-    suspend fun download(context: Context, info: UpdateInfo, onProgress: (Int) -> Unit): Result<File> = withContext(Dispatchers.IO) {
+    suspend fun download(
+        context: Context,
+        info: UpdateInfo,
+        onProgress: (Int) -> Unit
+    ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
             val target = File(context.getExternalFilesDir("updates"), "Selyro-TV-update.apk")
             target.parentFile?.mkdirs()
@@ -96,7 +101,7 @@ object UpdateManager {
                     val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                     val done = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
                     val total = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                    if (total > 0) onProgress(((done * 100L) / total).toInt().coerceIn(0, 100))
+                    if (total > 0L) onProgress(((done * 100L) / total).toInt().coerceIn(0, 100))
                     when (status) {
                         DownloadManager.STATUS_SUCCESSFUL -> finished = true
                         DownloadManager.STATUS_FAILED -> error("Update download failed")
@@ -104,6 +109,7 @@ object UpdateManager {
                 }
                 if (!finished) delay(750)
             }
+
             if (!target.exists() || target.length() == 0L) error("Downloaded APK is empty")
             val actual = sha256(target)
             if (!actual.equals(info.sha256, ignoreCase = true)) {
@@ -116,10 +122,11 @@ object UpdateManager {
 
     fun install(context: Context, file: File) {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     private fun sha256(file: File): String {
