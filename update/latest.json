@@ -1,0 +1,7 @@
+{
+  "versionCode": 6,
+  "versionName": "0.2.5-updater",
+  "apkUrl": "https://raw.githubusercontent.com/aseel90/iptv/qa/full-v1-ci/update/Selyro-TV-latest.apk",
+  "sha256": "pending-build",
+  "notes": "Adds built-in update downloads and installer handoff."
+}
