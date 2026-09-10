@@ -1,6 +1,5 @@
 package com.selyro.tv.ui
 
-import android.view.KeyEvent
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -39,8 +38,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -148,22 +150,22 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
-                if (event.nativeKeyEvent.action != KeyEvent.ACTION_DOWN) return@onPreviewKeyEvent false
-                when (event.nativeKeyEvent.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { seekBy(-10_000L); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { seekBy(10_000L); true }
-                    KeyEvent.KEYCODE_MEDIA_REWIND -> { seekBy(-30_000L); true }
-                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekBy(30_000L); true }
-                    KeyEvent.KEYCODE_DPAD_CENTER,
-                    KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft -> { seekBy(-10_000L); true }
+                    Key.DirectionRight -> { seekBy(10_000L); true }
+                    Key.MediaRewind -> { seekBy(-30_000L); true }
+                    Key.MediaFastForward -> { seekBy(30_000L); true }
+                    Key.DirectionCenter,
+                    Key.Enter,
+                    Key.MediaPlayPause -> {
                         if (player.isPlaying) player.pause() else player.play()
                         playing = player.isPlaying
                         revealControls()
                         true
                     }
-                    KeyEvent.KEYCODE_DPAD_UP,
-                    KeyEvent.KEYCODE_DPAD_DOWN -> { revealControls(); true }
+                    Key.DirectionUp,
+                    Key.DirectionDown -> { revealControls(); true }
                     else -> false
                 }
             }
