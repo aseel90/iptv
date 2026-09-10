@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.2.8-series-hotfix"
+        versionCode = 10
+        versionName = "0.3.0-ui-refresh"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -55,6 +55,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
