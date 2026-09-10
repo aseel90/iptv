@@ -12,6 +12,7 @@
         android:banner="@drawable/selyro_tv_banner"
         android:hardwareAccelerated="true"
         android:icon="@drawable/selyro_tv_icon"
+        android:roundIcon="@drawable/selyro_tv_icon"
         android:label="Selyro TV"
         android:supportsRtl="true"
         android:theme="@style/Theme.Selyro"
@@ -23,6 +24,7 @@
             android:screenOrientation="landscape">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>

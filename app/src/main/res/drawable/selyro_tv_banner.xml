@@ -5,7 +5,10 @@
             <gradient android:startColor="#070B10" android:endColor="#111923" android:angle="0" />
         </shape>
     </item>
-    <item android:left="34dp" android:top="22dp" android:right="184dp" android:bottom="22dp">
-        <bitmap android:gravity="center" android:src="@drawable/selyro_tv_icon" />
-    </item>
+    <item
+        android:drawable="@drawable/selyro_tv_icon"
+        android:left="34dp"
+        android:top="22dp"
+        android:right="184dp"
+        android:bottom="22dp" />
 </layer-list>
