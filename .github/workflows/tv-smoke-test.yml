@@ -80,11 +80,14 @@ jobs:
           pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head qa/full-v1-ci --state open --json number --jq '.[0].number // empty')
           if [ -z "$pr" ]; then exit 0; fi
           if [ "$OUTCOME" = "success" ]; then
-            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "### Android TV launcher smoke: PASS
-Commit: \`${GITHUB_SHA}\`
-Verified install, standard LAUNCHER resolution, LEANBACK_LAUNCHER resolution, startup to resumed MainActivity, and no fatal app crash."
+            printf '%s\n%s\n%s\n' \
+              '### Android TV launcher smoke: PASS' \
+              "Commit: ${GITHUB_SHA}" \
+              'Verified install, standard LAUNCHER resolution, LEANBACK_LAUNCHER resolution, startup to resumed MainActivity, and no fatal app crash.' > /tmp/tv-result.md
           else
-            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "### Android TV launcher smoke: FAIL
-Commit: \`${GITHUB_SHA}\`
-The TV emulator launchability test failed. Do not distribute this build."
+            printf '%s\n%s\n%s\n' \
+              '### Android TV launcher smoke: FAIL' \
+              "Commit: ${GITHUB_SHA}" \
+              'The TV emulator launchability test failed. Do not distribute this build.' > /tmp/tv-result.md
           fi
+          gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body-file /tmp/tv-result.md
