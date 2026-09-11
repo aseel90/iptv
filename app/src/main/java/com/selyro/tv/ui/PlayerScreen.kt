@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -58,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
@@ -104,6 +106,8 @@ fun PlayerScreen(
     onLiveTune: (Channel) -> Unit = {},
     onToggleLiveFavorite: () -> Unit = {},
     onProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
+    nextLabel: String? = null,
+    onPlayNext: (() -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val isLive = liveContext != null
@@ -116,6 +120,8 @@ fun PlayerScreen(
     var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
     var bufferPercent by remember { mutableIntStateOf(player.bufferedPercentage.coerceIn(0, 100)) }
     var seekHint by remember { mutableStateOf<String?>(null) }
+    var streamError by remember { mutableStateOf<String?>(null) }
+    var ended by remember { mutableStateOf(player.playbackState == Player.STATE_ENDED) }
     var tracksVersion by remember { mutableIntStateOf(0) }
     var trackPanelVisible by remember { mutableStateOf(false) }
     var trackTab by remember { mutableStateOf(TrackTab.AUDIO) }
@@ -209,13 +215,22 @@ fun PlayerScreen(
         interactionVersion++
     }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, language) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
                 playing = player.isPlaying
+                ended = playbackState == Player.STATE_ENDED
                 bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
-                if (playbackState == Player.STATE_ENDED) persistProgress(force = true)
+                if (playbackState == Player.STATE_READY) streamError = null
+                if (playbackState == Player.STATE_ENDED) {
+                    persistProgress(force = true)
+                    controlsVisible = true
+                }
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                streamError = pt(language, "Stream unavailable • retrying…", "البث غير متاح • جاري إعادة المحاولة…")
+                controlsVisible = true
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (!isLive) revealControls() }
             override fun onTracksChanged(tracks: Tracks) { tracksVersion++ }
@@ -275,12 +290,27 @@ fun PlayerScreen(
 
     LaunchedEffect(seekHint) { if (seekHint != null) { delay(1_100); seekHint = null } }
 
+    LaunchedEffect(buffering, player.currentMediaItem?.mediaId) {
+        if (buffering) {
+            delay(12_000)
+            if (buffering && player.playbackState != Player.STATE_READY) {
+                streamError = pt(language, "Slow or offline stream • retrying…", "البث بطيء أو متوقف • جاري إعادة المحاولة…")
+            }
+        }
+    }
+
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusRequester(focusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
-                if (trackPanelVisible) {
+                if (!isLive && ended && nextLabel != null && onPlayNext != null &&
+                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.MediaPlayPause)) {
+                    onPlayNext.invoke()
+                    ended = false
+                    streamError = null
+                    true
+                } else if (trackPanelVisible) {
                     when (event.key) {
                         Key.DirectionLeft -> { trackTab = TrackTab.AUDIO; trackCursor = optionsIndexForSelected(audioOptions); true }
                         Key.DirectionRight -> { trackTab = TrackTab.SUBTITLES; trackCursor = optionsIndexForSelected(subtitleOptions); true }
@@ -407,6 +437,33 @@ fun PlayerScreen(
                         audioOptions.size > 1 || subtitleOptions.size > 1
                     )
                 }
+            }
+        }
+
+        if (streamError != null && !buffering) {
+            Box(
+                Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp))
+                    .background(Color.Black.copy(alpha = 0.82f))
+                    .border(1.dp, Color(0xFFFFB86B).copy(alpha = .75f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
+            ) {
+                Text(streamError.orEmpty(), color = Color.White, fontSize = 14.sp)
+            }
+        }
+
+        if (!isLive && ended && nextLabel != null && onPlayNext != null) {
+            Column(
+                Modifier.align(Alignment.Center).widthIn(min = 360.dp, max = 560.dp)
+                    .clip(RoundedCornerShape(20.dp)).background(PlayerPanelStrong)
+                    .border(1.dp, PlayerAccent.copy(alpha = .65f), RoundedCornerShape(20.dp))
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(pt(language, "UP NEXT", "التالي"), color = PlayerAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text(nextLabel, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+                Spacer(Modifier.height(12.dp))
+                Text(pt(language, "Press OK to play next episode", "اضغط OK لتشغيل الحلقة التالية"), color = PlayerMuted, fontSize = 13.sp)
             }
         }
 
@@ -548,10 +605,28 @@ private fun LiveInfoPanel(modifier: Modifier, language: AppLanguage, channel: Ch
         if (epg.isEmpty()) {
             Text(pt(language, "No guide data available", "لا توجد بيانات للجدول"), color = PlayerMuted, fontSize = 13.sp)
         } else {
-            epg.sortedBy { it.start }.take(5).forEach { program ->
-                Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
-                    Text(program.title.ifBlank { pt(language, "Program", "برنامج") }, color = Color.White, fontSize = 14.sp, maxLines = 1)
-                    if (!program.description.isNullOrBlank()) Text(program.description.orEmpty(), color = PlayerMuted, fontSize = 11.sp, maxLines = 2)
+            val now = System.currentTimeMillis()
+            val ordered = epg.sortedBy { it.start }
+            val current = ordered.firstOrNull { it.start <= now && now < it.end }
+            if (current != null) {
+                Text(pt(language, "NOW", "الآن") + "  ${epgTime(current.start)}–${epgTime(current.end)}", color = PlayerAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(5.dp))
+                Text(current.title.ifBlank { pt(language, "Program", "برنامج") }, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                val progress = if (current.end > current.start) ((now - current.start).toFloat() / (current.end - current.start)).coerceIn(0f, 1f) else 0f
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = .14f))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(PlayerAccent))
+                }
+                if (!current.description.isNullOrBlank()) {
+                    Spacer(Modifier.height(7.dp))
+                    Text(current.description.orEmpty(), color = PlayerMuted, fontSize = 11.sp, maxLines = 3)
+                }
+                Spacer(Modifier.height(15.dp))
+            }
+            Text(pt(language, "NEXT", "التالي"), color = PlayerAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            ordered.filter { it !== current && it.end > now }.take(4).forEach { program ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Text("${epgTime(program.start)}  ${program.title.ifBlank { pt(language, "Program", "برنامج") }}", color = Color.White, fontSize = 13.sp, maxLines = 1)
                 }
             }
         }
@@ -576,6 +651,11 @@ private fun LiveZapToast(modifier: Modifier, language: AppLanguage, channel: Cha
             Text(pt(language, "Switching channel…", "جاري تبديل القناة…"), color = PlayerMuted, fontSize = 11.sp)
         }
     }
+}
+
+private fun epgTime(epochMs: Long): String {
+    if (epochMs <= 0L) return "--:--"
+    return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(epochMs))
 }
 
 private fun channelMonogram(name: String): String {

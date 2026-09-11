@@ -64,11 +64,12 @@ private val LocalAppLanguage = compositionLocalOf { AppLanguage.ENGLISH }
 
 @Composable private fun tx(en: String, ar: String): String = if (LocalAppLanguage.current == AppLanguage.ARABIC) ar else en
 
-private enum class Section { HOME, LIVE, MOVIES, SERIES, FAVORITES, RECENT, SETTINGS }
+private enum class Section { HOME, SEARCH, LIVE, MOVIES, SERIES, FAVORITES, RECENT, SETTINGS }
 
 @Composable
 private fun sectionLabel(section: Section): String = when (section) {
     Section.HOME -> tx("Home", "الرئيسية")
+    Section.SEARCH -> tx("Search", "بحث")
     Section.LIVE -> tx("Live TV", "القنوات")
     Section.MOVIES -> tx("Movies", "الأفلام")
     Section.SERIES -> tx("Series", "المسلسلات")
@@ -92,6 +93,7 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
     val channels by vm.channels.collectAsState()
     val epgByChannel by vm.epgByChannel.collectAsState()
     val favorites by vm.favorites.collectAsState()
+    val selectedSeriesDetails by vm.selectedSeriesDetails.collectAsState()
     val localContext = LocalContext.current
     val context = localContext.applicationContext
     val hostActivity = localContext as? ComponentActivity
@@ -159,8 +161,9 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                         backEnabled = currentRequest == null
                     ) { request ->
                         vm.markWatched(request.kind, request.id)
+                        if (request.kind == "live") channels.firstOrNull { it.id == request.id }?.let(vm::rememberLive)
                         val manager = playback ?: PlaybackManager(context, profile).also { playback = it }
-                        manager.play(request.url, request.title, vm.resumePosition(request.kind, request.id))
+                        manager.play(request.url, request.title, vm.resumePosition(request.kind, request.id), isLive = request.kind == "live")
                         playing = request
                     }
 
@@ -176,6 +179,12 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                             if (currentRequest.kind == "live") currentLiveChannel?.let(vm::loadEpg)
                         }
 
+                        val nextEpisode = if (currentRequest.kind == "episode") {
+                            val orderedEpisodes = selectedSeriesDetails?.episodes.orEmpty().sortedWith(compareBy<Episode> { it.season }.thenBy { it.episode })
+                            val currentIndex = orderedEpisodes.indexOfFirst { it.id == currentRequest.id }
+                            orderedEpisodes.getOrNull(currentIndex + 1)
+                        } else null
+
                         PlayerScreen(
                             player = activePlayback.player,
                             language = language,
@@ -189,7 +198,8 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                             } else null,
                             onLiveTune = { channel ->
                                 vm.markWatched("live", channel.id)
-                                activePlayback.play(channel.url, channel.name)
+                                vm.rememberLive(channel)
+                                activePlayback.play(channel.url, channel.name, isLive = true)
                                 playing = PlayRequest("live", channel.id, channel.name, channel.url, channel.group)
                             },
                             onToggleLiveFavorite = {
@@ -197,6 +207,14 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                             },
                             onProgress = { positionMs, durationMs ->
                                 vm.savePlaybackProgress(currentRequest.kind, currentRequest.id, positionMs, durationMs)
+                            },
+                            nextLabel = nextEpisode?.let { "S${it.season} E${it.episode}  ${it.title}" },
+                            onPlayNext = nextEpisode?.let { episode ->
+                                {
+                                    vm.markWatched("episode", episode.id)
+                                    activePlayback.play(episode.streamUrl, episode.title, vm.resumePosition("episode", episode.id), isLive = false)
+                                    playing = PlayRequest("episode", episode.id, episode.title, episode.streamUrl)
+                                }
                             }
                         ) {
                             activePlayback.stop()
@@ -258,7 +276,13 @@ private fun LoginScreen(vm: AppViewModel) {
 private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdates: () -> Unit, onUpdate: (UpdateInfo) -> Unit, backEnabled: Boolean = true, onPlay: (PlayRequest) -> Unit) {
     var section by remember { mutableStateOf(Section.HOME) }; val error by vm.error.collectAsState(); val context = LocalContext.current; var showExit by remember { mutableStateOf(false) }
     BackHandler(enabled = backEnabled) { if (section != Section.HOME) section = Section.HOME else showExit = true }
-    LaunchedEffect(section) { when (section) { Section.LIVE -> vm.loadLive(); Section.MOVIES -> vm.ensureMovies(); Section.SERIES -> vm.ensureSeries(); else -> Unit } }
+    LaunchedEffect(section) { when (section) {
+        Section.LIVE -> vm.loadLive()
+        Section.MOVIES -> vm.ensureMovies()
+        Section.SERIES -> vm.ensureSeries()
+        Section.SEARCH -> { vm.loadLive(); vm.ensureMovies(); vm.ensureSeries() }
+        else -> Unit
+    } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxWidth < 1100.dp; val railWidth = if (compact) 170.dp else 208.dp; val contentPadding = if (compact) 16.dp else 26.dp
         Row(Modifier.fillMaxSize()) {
@@ -267,15 +291,25 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
             }
             Column(Modifier.weight(1f).fillMaxHeight().padding(contentPadding)) {
                 if (!error.isNullOrBlank()) { Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF3A2022)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Text(error.orEmpty(), color = Color.White, modifier = Modifier.weight(1f), maxLines = 2); Spacer(Modifier.width(8.dp)); TvButton(tx("Dismiss", "إغلاق")) { vm.clearError() } }; Spacer(Modifier.height(10.dp)) }
-                when (section) { Section.HOME -> HomeScreen(vm) { section = it }; Section.LIVE -> LiveScreen(vm, onPlay); Section.MOVIES -> MoviesScreen(vm, onPlay); Section.SERIES -> SeriesScreen(vm, onPlay); Section.FAVORITES -> FavoritesScreen(vm, onPlay); Section.RECENT -> RecentScreen(vm, onPlay); Section.SETTINGS -> SettingsScreen(vm, updateStatus, onCheckUpdates, onUpdate) }
+                when (section) {
+                    Section.HOME -> HomeScreen(vm, onPlay) { section = it }
+                    Section.SEARCH -> SearchScreen(vm, onPlay) { seriesItem -> vm.loadSeriesDetails(seriesItem); section = Section.SERIES }
+                    Section.LIVE -> LiveScreen(vm, onPlay)
+                    Section.MOVIES -> MoviesScreen(vm, onPlay)
+                    Section.SERIES -> SeriesScreen(vm, onPlay)
+                    Section.FAVORITES -> FavoritesScreen(vm, onPlay)
+                    Section.RECENT -> RecentScreen(vm, onPlay)
+                    Section.SETTINGS -> SettingsScreen(vm, updateStatus, onCheckUpdates, onUpdate)
+                }
             }
         }
     }
     if (showExit) ExitConfirmDialog({ showExit = false }) { (context as? Activity)?.finishAndRemoveTask() }
 }
 
-@Composable private fun HomeScreen(vm: AppViewModel, go: (Section) -> Unit) {
-    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val series by vm.series.collectAsState(); val info by vm.providerInfo.collectAsState(); val account by vm.account.collectAsState()
+@Composable private fun HomeScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit, go: (Section) -> Unit) {
+    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val series by vm.series.collectAsState(); val info by vm.providerInfo.collectAsState(); val account by vm.account.collectAsState(); val lastLiveId by vm.lastLiveId.collectAsState(); val progress by vm.playbackProgress.collectAsState(); val lastChannel = remember(channels, lastLiveId) { channels.firstOrNull { it.id == lastLiveId } }; val continueMovie = remember(movies, progress) { movies.mapNotNull { movie -> progress["movie:${movie.id}"]?.let { movie to it } }.maxByOrNull { it.second.updatedAtMs } }
+    LaunchedEffect(progress) { if (movies.isEmpty() && progress.keys.any { it.startsWith("movie:") }) vm.ensureMovies() }
     Heading(tx("Home", "الرئيسية"), tx("Your entertainment, without the clutter", "ترفيهك بشكل أبسط وأوضح"))
     Row(
         Modifier.fillMaxWidth().height(194.dp).clip(RoundedCornerShape(24.dp))
@@ -293,11 +327,24 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
             )
             Spacer(Modifier.height(17.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                TvButton(tx("WATCH LIVE", "شاهد القنوات"), true) { go(Section.LIVE) }
-                TvButton(tx("BROWSE MOVIES", "تصفح الأفلام")) { go(Section.MOVIES) }
+                if (lastChannel != null) {
+                    TvButton(tx("RESUME LIVE", "متابعة القناة"), true) {
+                        val c = lastChannel!!
+                        onPlay(PlayRequest("live", c.id, c.name, c.url, c.group))
+                    }
+                    TvButton(tx("ALL CHANNELS", "كل القنوات")) { go(Section.LIVE) }
+                } else {
+                    TvButton(tx("WATCH LIVE", "شاهد القنوات"), true) { go(Section.LIVE) }
+                    TvButton(tx("BROWSE MOVIES", "تصفح الأفلام")) { go(Section.MOVIES) }
+                }
             }
         }
         Image(painterResource(R.drawable.selyro_tv_icon), "Selyro TV", Modifier.size(116.dp))
+    }
+    if (continueMovie != null) {
+        Spacer(Modifier.height(12.dp))
+        val (movie, saved) = continueMovie!!
+        TvListItem(movie.name, tx("Continue watching", "متابعة المشاهدة") + " • ${(saved.fraction * 100).toInt()}%", progress = saved.fraction) { onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) }
     }
     Spacer(Modifier.height(19.dp))
     Text(tx("Browse", "تصفح"), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
@@ -309,13 +356,83 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
     }
 }
 
+@Composable private fun SearchScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit, onSeries: (SeriesItem) -> Unit) {
+    val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val series by vm.series.collectAsState(); val history by vm.searchHistory.collectAsState(); var query by remember { mutableStateOf("") }
+    val clean = query.trim()
+    val liveResults = remember(channels, clean) { if (clean.length < 2) emptyList() else channels.asSequence().filter { it.name.contains(clean, true) }.take(20).toList() }
+    val movieResults = remember(movies, clean) { if (clean.length < 2) emptyList() else movies.asSequence().filter { it.name.contains(clean, true) }.take(20).toList() }
+    val seriesResults = remember(series, clean) { if (clean.length < 2) emptyList() else series.asSequence().filter { it.name.contains(clean, true) }.take(20).toList() }
+    Heading(tx("Search", "بحث"), tx("Live TV, movies and series in one place", "القنوات والأفلام والمسلسلات في مكان واحد"))
+    TvInput(tx("Search everything", "ابحث في كل المحتوى"), query) { query = it }
+    Spacer(Modifier.height(12.dp))
+    if (clean.length < 2) {
+        if (history.isNotEmpty()) {
+            Text(tx("Recent searches", "عمليات البحث الأخيرة"), color = Accent, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { history.take(5).forEach { term -> TvButton(term) { query = term } } }
+            Spacer(Modifier.height(10.dp))
+            TvButton(tx("CLEAR HISTORY", "مسح السجل")) { vm.clearSearchHistory() }
+        } else Text(tx("Type at least 2 characters", "اكتب حرفين على الأقل"), color = Muted)
+        return
+    }
+    val total = liveResults.size + movieResults.size + seriesResults.size
+    Text("$total ${tx("results", "نتيجة")}", color = Muted, fontSize = 12.sp)
+    Spacer(Modifier.height(8.dp))
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (liveResults.isNotEmpty()) item { Text(tx("LIVE TV", "القنوات"), color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp)) }
+        items(liveResults, key = { "search-live-${it.id}" }) { item -> TvListItem(item.name, tx("Live", "قناة") + " • ${item.group}") { vm.rememberSearch(clean); onPlay(PlayRequest("live", item.id, item.name, item.url, item.group)) } }
+        if (movieResults.isNotEmpty()) item { Text(tx("MOVIES", "الأفلام"), color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+        items(movieResults, key = { "search-movie-${it.id}" }) { item -> TvListItem(item.name, listOfNotNull(item.year, item.category).filter { it.isNotBlank() }.joinToString(" • ")) { vm.rememberSearch(clean); onPlay(PlayRequest("movie", item.id, item.name, item.streamUrl)) } }
+        if (seriesResults.isNotEmpty()) item { Text(tx("SERIES", "المسلسلات"), color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+        items(seriesResults, key = { "search-series-${it.id}" }) { item -> TvListItem(item.name, listOfNotNull(item.year, item.category).filter { it.isNotBlank() }.joinToString(" • ")) { vm.rememberSearch(clean); onSeries(item) } }
+        if (total == 0) item { Text(tx("No matches", "لا توجد نتائج"), color = Muted) }
+    }
+}
+
 @Composable private fun LiveScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
-    val all by vm.channels.collectAsState(); val epg by vm.epgByChannel.collectAsState(); val loading by vm.loadingSection.collectAsState(); val mode by vm.displayMode.collectAsState(); var query by remember { mutableStateOf("") }; var group by remember { mutableStateOf("All") }; var selected by remember { mutableStateOf<Channel?>(null) }; val groups = remember(all) { listOf("All") + all.map { it.group.ifBlank { "Other" } }.distinct().sorted() }; val filtered = remember(all, query, group) { all.asSequence().filter { group == "All" || it.group == group }.filter { query.isBlank() || it.name.contains(query, true) }.toList() }; LaunchedEffect(selected?.id) { selected?.let(vm::loadEpg) }
+    val all by vm.channels.collectAsState(); val epg by vm.epgByChannel.collectAsState(); val loading by vm.loadingSection.collectAsState(); val mode by vm.displayMode.collectAsState(); val lastLiveId by vm.lastLiveId.collectAsState(); val lastLiveGroup by vm.lastLiveGroup.collectAsState(); var query by remember { mutableStateOf("") }; var group by remember { mutableStateOf("All") }; var selected by remember { mutableStateOf<Channel?>(null) }; val groups = remember(all) { listOf("All") + all.map { it.group.ifBlank { "Other" } }.distinct().sorted() }; val filtered = remember(all, query, group) { all.asSequence().filter { group == "All" || it.group == group }.filter { query.isBlank() || it.name.contains(query, true) }.toList() }; LaunchedEffect(all, lastLiveId, lastLiveGroup) { if (selected == null && lastLiveId != null) selected = all.firstOrNull { it.id == lastLiveId }; if (group == "All" && lastLiveGroup != null && lastLiveGroup in groups) group = lastLiveGroup!! }; LaunchedEffect(selected?.id) { selected?.let(vm::loadEpg) }
     Heading(tx("Live TV", "القنوات المباشرة"), "${all.size} ${tx("channels", "قناة")}"); TvInput(tx("Search channels", "بحث في القنوات"), query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Live TV" && all.isEmpty()) { LoadingBox(tx("Loading channels…", "جاري تحميل القنوات…")); return }
     BoxWithConstraints(Modifier.fillMaxSize()) { val showDetails = maxWidth >= 820.dp && mode == DisplayMode.LIST; val categoryWidth = if (maxWidth < 850.dp) 145.dp else 180.dp; Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { LazyColumn(Modifier.width(categoryWidth), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(groups) { g -> val label = if (g == "All") tx("All", "الكل") else g; val count = if (g == "All") all.size else all.count { it.group == g }; TvNavItem("$label ($count)", group == g) { group = g; selected = null } } }; if (mode == DisplayMode.GRID) { LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) { gridItems(filtered, key = { it.id }) { channel -> ChannelGridCard(channel, { selected = channel }) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url, channel.group)) } } } } else { LazyColumn(Modifier.weight(if (showDetails) 1.15f else 1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(filtered, key = { it.id }) { channel -> TvListItem(channel.name, channel.group, onFocus = { selected = channel }) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url, channel.group)) } } }; if (showDetails) ChannelDetails(Modifier.weight(.85f), selected, epg[selected?.id].orEmpty(), vm, onPlay) } } }
 }
 
-@Composable private fun ChannelDetails(modifier: Modifier, channel: Channel?, epg: List<EpgProgram>, vm: AppViewModel, onPlay: (PlayRequest) -> Unit) { Column(modifier.fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(18.dp)) { if (channel == null) { Text(tx("Select a channel", "اختر قناة"), color = Muted); return@Column }; AsyncImage(model = channel.logo?.takeIf { it.isNotBlank() }, contentDescription = channel.name, modifier = Modifier.size(104.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)).padding(10.dp), placeholder = painterResource(R.drawable.selyro_tv_icon), error = painterResource(R.drawable.selyro_tv_icon), fallback = painterResource(R.drawable.selyro_tv_icon), contentScale = ContentScale.Fit); Spacer(Modifier.height(12.dp)); Text(channel.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2); Text(channel.group, color = Muted, maxLines = 1); Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { TvButton(tx("Play", "تشغيل"), true) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url, channel.group)) }; TvButton(if (vm.isFavorite("live", channel.id)) tx("★ Saved", "★ محفوظة") else tx("☆ Favorite", "☆ مفضلة")) { vm.toggleFavorite("live", channel.id) } }; Spacer(Modifier.height(16.dp)); Text("EPG", color = Accent, fontWeight = FontWeight.SemiBold); if (epg.isEmpty()) Text(tx("No guide data", "لا توجد بيانات للجدول"), color = Muted) else epg.take(4).forEach { p -> Spacer(Modifier.height(7.dp)); Text(if (p.title.isBlank()) tx("Program", "برنامج") else p.title, color = Color.White, fontSize = 14.sp, maxLines = 1) } } }
+@Composable private fun ChannelDetails(modifier: Modifier, channel: Channel?, epg: List<EpgProgram>, vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
+    Column(modifier.fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(18.dp)) {
+        if (channel == null) { Text(tx("Select a channel", "اختر قناة"), color = Muted); return@Column }
+        AsyncImage(model = channel.logo?.takeIf { it.isNotBlank() }, contentDescription = channel.name, modifier = Modifier.size(104.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF19232D)).padding(10.dp), placeholder = painterResource(R.drawable.selyro_tv_icon), error = painterResource(R.drawable.selyro_tv_icon), fallback = painterResource(R.drawable.selyro_tv_icon), contentScale = ContentScale.Fit)
+        Spacer(Modifier.height(12.dp))
+        Text(channel.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+        Text(channel.group, color = Muted, maxLines = 1)
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TvButton(tx("Play", "تشغيل"), true) { onPlay(PlayRequest("live", channel.id, channel.name, channel.url, channel.group)) }
+            TvButton(if (vm.isFavorite("live", channel.id)) tx("★ Saved", "★ محفوظة") else tx("☆ Favorite", "☆ مفضلة")) { vm.toggleFavorite("live", channel.id) }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("EPG", color = Accent, fontWeight = FontWeight.SemiBold)
+        if (epg.isEmpty()) {
+            Text(tx("No guide data", "لا توجد بيانات للجدول"), color = Muted)
+        } else {
+            val now = System.currentTimeMillis()
+            val ordered = epg.sortedBy { it.start }
+            val current = ordered.firstOrNull { it.start <= now && now < it.end }
+            if (current != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(tx("NOW", "الآن") + "  ${formatEpgTime(current.start)}–${formatEpgTime(current.end)}", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(current.title.ifBlank { tx("Program", "برنامج") }, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                val fraction = if (current.end > current.start) ((now - current.start).toFloat() / (current.end - current.start)).coerceIn(0f, 1f) else 0f
+                Spacer(Modifier.height(6.dp))
+                Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = .12f))) { Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(Accent)) }
+            }
+            Spacer(Modifier.height(10.dp))
+            ordered.filter { it !== current && it.end > now }.take(3).forEach { p ->
+                Text("${formatEpgTime(p.start)}  ${p.title.ifBlank { tx("Program", "برنامج") }}", color = Color.White, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(vertical = 4.dp))
+            }
+        }
+    }
+}
+
+private fun formatEpgTime(epochMs: Long): String = if (epochMs <= 0L) "--:--" else
+    java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(epochMs))
 
 @Composable private fun MoviesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
     val all by vm.movies.collectAsState(); val loading by vm.loadingSection.collectAsState(); val mode by vm.displayMode.collectAsState(); val progress by vm.playbackProgress.collectAsState(); var query by remember { mutableStateOf("") }; var category by remember { mutableStateOf("All") }; var selected by remember { mutableStateOf<VodItem?>(null) }; val categories = remember(all) { all.map { it.category.ifBlank { "Other" } }.distinct().sorted() }; LaunchedEffect(categories) { if (categories.isNotEmpty() && category == "All") category = categories.first() }; val filtered = remember(all, query, category) { all.filter { (category == "All" || it.category == category) && (query.isBlank() || it.name.contains(query, true)) } }
@@ -325,6 +442,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
 
 @Composable private fun SeriesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
     val all by vm.series.collectAsState(); val details by vm.selectedSeriesDetails.collectAsState(); val loading by vm.loadingSection.collectAsState(); val mode by vm.displayMode.collectAsState(); val progress by vm.playbackProgress.collectAsState(); var query by remember { mutableStateOf("") }; var category by remember { mutableStateOf("All") }; var selected by remember { mutableStateOf<SeriesItem?>(null) }; var openedSeriesId by remember { mutableStateOf<String?>(null) }; val categories = remember(all) { all.map { it.category.ifBlank { "Other" } }.distinct().sorted() }; LaunchedEffect(categories) { if (categories.isNotEmpty() && category == "All") category = categories.first() }; val filtered = remember(all, query, category) { all.filter { (category == "All" || it.category == category) && (query.isBlank() || it.name.contains(query, true)) } }
+    LaunchedEffect(details?.series?.id) { val d = details; if (d != null && openedSeriesId == null) { selected = d.series; openedSeriesId = d.series.id } }
     val openedSeries = selected?.takeIf { it.id == openedSeriesId }
     if (openedSeries != null) {
         BackHandler { openedSeriesId = null; selected = null; vm.clearSeriesDetails() }

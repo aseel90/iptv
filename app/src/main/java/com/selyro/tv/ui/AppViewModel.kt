@@ -40,8 +40,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val displayMode = MutableStateFlow(store.displayMode())
     val playbackProgress = MutableStateFlow(store.playbackProgress())
     val addingAccount = MutableStateFlow(false)
+    val lastLiveId = MutableStateFlow(store.lastLiveId(_account.value))
+    val lastLiveGroup = MutableStateFlow(store.lastLiveGroup(_account.value))
+    val searchHistory = MutableStateFlow(store.searchHistory())
 
-    private var epgJob: Job? = null
+    private val epgJobs = mutableMapOf<String, Job>()
+    private val epgLoadedAt = mutableMapOf<String, Long>()
+    private val epgCacheTtlMs = 10 * 60 * 1000L
 
     init {
         if (_account.value != null) loadLive()
@@ -68,10 +73,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 store.save(account)
                 accounts.value = store.accounts()
                 _account.value = account
+                lastLiveId.value = store.lastLiveId(account)
+                lastLiveGroup.value = store.lastLiveGroup(account)
                 channels.value = loadedChannels
                 movies.value = emptyList()
                 series.value = emptyList()
-                epgByChannel.value = emptyMap()
+                clearEpgCache()
                 selectedSeriesDetails.value = null
                 addingAccount.value = false
             }.onFailure { error.value = friendlyError(it) }
@@ -82,12 +89,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun beginAddAccount() {
         addingAccount.value = true
         _account.value = null
+        lastLiveId.value = null
+        lastLiveGroup.value = null
         error.value = null
     }
 
     fun cancelAddAccount() {
         addingAccount.value = false
         _account.value = store.load()
+        lastLiveId.value = store.lastLiveId(_account.value)
+        lastLiveGroup.value = store.lastLiveGroup(_account.value)
         if (_account.value != null && channels.value.isEmpty()) loadLive(force = true)
     }
 
@@ -95,11 +106,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (_account.value == target) return
         store.setActive(target)
         _account.value = target
+        lastLiveId.value = store.lastLiveId(target)
+        lastLiveGroup.value = store.lastLiveGroup(target)
         channels.value = emptyList()
         movies.value = emptyList()
         series.value = emptyList()
         providerInfo.value = null
-        epgByChannel.value = emptyMap()
+        clearEpgCache()
         selectedSeriesDetails.value = null
         error.value = null
         loadLive(force = true)
@@ -111,11 +124,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         accounts.value = store.accounts()
         if (wasActive) {
             _account.value = store.load()
+            lastLiveId.value = store.lastLiveId(_account.value)
+            lastLiveGroup.value = store.lastLiveGroup(_account.value)
             channels.value = emptyList()
             movies.value = emptyList()
             series.value = emptyList()
             providerInfo.value = null
-            epgByChannel.value = emptyMap()
+            clearEpgCache()
             selectedSeriesDetails.value = null
             if (_account.value != null) loadLive(force = true)
         }
@@ -176,15 +191,45 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSeriesDetails() { selectedSeriesDetails.value = null }
 
-    fun loadEpg(channel: Channel) {
+    private fun clearEpgCache() {
+        epgJobs.values.forEach { it.cancel() }
+        epgJobs.clear()
+        epgLoadedAt.clear()
+        epgByChannel.value = emptyMap()
+    }
+
+    fun loadEpg(channel: Channel, force: Boolean = false) {
         val account = _account.value ?: return
-        if (account.type != SourceType.XTREAM || epgByChannel.value.containsKey(channel.id)) return
-        epgJob?.cancel()
-        epgJob = viewModelScope.launch {
-            delay(300)
-            val list = XtreamClient(account).shortEpg(channel.id)
+        if (account.type != SourceType.XTREAM) return
+        val now = System.currentTimeMillis()
+        val fresh = epgByChannel.value.containsKey(channel.id) &&
+            now - (epgLoadedAt[channel.id] ?: 0L) < epgCacheTtlMs
+        if (!force && fresh) return
+        epgJobs[channel.id]?.cancel()
+        epgJobs[channel.id] = viewModelScope.launch {
+            delay(180)
+            val list = XtreamClient(account).shortEpg(channel.id, limit = 8)
             epgByChannel.value = epgByChannel.value + (channel.id to list)
+            epgLoadedAt[channel.id] = System.currentTimeMillis()
+            epgJobs.remove(channel.id)
         }
+    }
+
+    fun rememberLive(channel: Channel) {
+        val account = _account.value ?: return
+        store.setLastLive(account, channel.id, channel.group)
+        lastLiveId.value = channel.id
+        lastLiveGroup.value = channel.group
+    }
+
+    fun rememberSearch(term: String) {
+        store.addSearchTerm(term)
+        searchHistory.value = store.searchHistory()
+    }
+
+    fun clearSearchHistory() {
+        store.clearSearchHistory()
+        searchHistory.value = emptyList()
     }
 
     fun toggleFavorite(kind: String, id: String) {
@@ -242,8 +287,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         movies.value = emptyList()
         series.value = emptyList()
         providerInfo.value = null
-        epgByChannel.value = emptyMap()
+        clearEpgCache()
         selectedSeriesDetails.value = null
+        lastLiveId.value = null
+        lastLiveGroup.value = null
         error.value = null
     }
 
