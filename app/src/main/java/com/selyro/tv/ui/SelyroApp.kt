@@ -2,6 +2,7 @@ package com.selyro.tv.ui
 
 import android.app.Activity
 import android.content.Context
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -35,6 +36,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -89,7 +92,9 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
     val channels by vm.channels.collectAsState()
     val epgByChannel by vm.epgByChannel.collectAsState()
     val favorites by vm.favorites.collectAsState()
-    val context = LocalContext.current.applicationContext
+    val localContext = LocalContext.current
+    val context = localContext.applicationContext
+    val hostActivity = localContext as? ComponentActivity
     var playback by remember { mutableStateOf<PlaybackManager?>(null) }
     var playing by remember { mutableStateOf<PlayRequest?>(null) }
     var updateStatus by remember { mutableStateOf<UpdateStatus>(UpdateStatus.Idle) }
@@ -119,7 +124,20 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
     }
 
     LaunchedEffect(Unit) { checkUpdates() }
-    DisposableEffect(Unit) { onDispose { playback?.release(); playback = null } }
+    DisposableEffect(hostActivity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                playback?.stop()
+                playing = null
+            }
+        }
+        hostActivity?.lifecycle?.addObserver(observer)
+        onDispose {
+            hostActivity?.lifecycle?.removeObserver(observer)
+            playback?.release()
+            playback = null
+        }
+    }
     LaunchedEffect(profile) { playback?.setProfile(profile) }
 
     val language by vm.language.collectAsState()
@@ -233,7 +251,7 @@ private fun LoginScreen(vm: AppViewModel) {
             }
         }
     }
-    if (showExit) ExitConfirmDialog({ showExit = false }) { (context as? Activity)?.finish() }
+    if (showExit) ExitConfirmDialog({ showExit = false }) { (context as? Activity)?.finishAndRemoveTask() }
 }
 
 @Composable
@@ -253,7 +271,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
             }
         }
     }
-    if (showExit) ExitConfirmDialog({ showExit = false }) { (context as? Activity)?.finish() }
+    if (showExit) ExitConfirmDialog({ showExit = false }) { (context as? Activity)?.finishAndRemoveTask() }
 }
 
 @Composable private fun HomeScreen(vm: AppViewModel, go: (Section) -> Unit) {
