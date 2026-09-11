@@ -1,6 +1,8 @@
 package com.selyro.tv
 
+import android.content.Intent
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -21,6 +23,9 @@ import com.selyro.tv.ui.SelyroApp
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            window.setHideOverlayWindows(true)
+        }
         CrashReporter.markStage(this, "activity:onCreate:ready")
 
         val previousIssue = CrashReporter.lastIssue(this)
@@ -130,8 +135,19 @@ class MainActivity : ComponentActivity() {
         retry.requestFocus()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        Log.i("SelyroStartup", "activity:onNewIntent:reused")
+    }
+
     override fun onResume() {
         super.onResume()
         Log.i("SelyroStartup", "activity:onResume")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        Log.i("SelyroStartup", "activity:onStop")
     }
 }

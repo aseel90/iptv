@@ -1,0 +1,103 @@
+name: Export Selyro TV 0.3.5 APK
+
+on:
+  push:
+    branches: ['release/0.3.5-lifecycle-task-hotfix']
+    paths-ignore:
+      - 'ci-artifacts/**'
+      - 'relay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.5-lifecycle-task-hotfix
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Gradle 8.13
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Verify lifecycle and task source contract
+        run: |
+          set -euxo pipefail
+          grep -q 'versionCode = 15' app/build.gradle.kts
+          grep -q 'versionName = "0.3.5-lifecycle-hotfix"' app/build.gradle.kts
+          grep -q 'android.permission.HIDE_OVERLAY_WINDOWS' app/src/main/AndroidManifest.xml
+          grep -q 'android:launchMode="singleTask"' app/src/main/AndroidManifest.xml
+          grep -q 'setHideOverlayWindows(true)' app/src/main/java/com/selyro/tv/MainActivity.kt
+          grep -q 'override fun onNewIntent' app/src/main/java/com/selyro/tv/MainActivity.kt
+          grep -q 'Lifecycle.Event.ON_STOP' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'playback?.stop()' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          test "$(grep -c 'finishAndRemoveTask()' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt)" -ge 2
+      - name: Verify Live TV UX and TV identity remain preserved
+        run: |
+          set -euxo pipefail
+          grep -q 'fun queueZap' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          grep -q 'LiveControlHub' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          grep -q 'LiveChannelDrawer' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          test -s app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png
+          file app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png | grep -q '320 x 180'
+          test -s app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png
+          file app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png | grep -q '160 x 160'
+          grep -q 'android:banner="@drawable/selyro_tv_banner_asset"' app/src/main/AndroidManifest.xml
+          grep -q 'android:icon="@mipmap/ic_launcher_tv"' app/src/main/AndroidManifest.xml
+      - name: Test lint and build
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Re-sign with same stable Selyro QA key
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          $ANDROID_HOME/build-tools/36.0.0/apksigner sign --key /tmp/selyro-testkey.pk8 --cert /tmp/selyro-testkey.x509.pem --out /tmp/Selyro-TV-signed.apk "$APK"
+          mv /tmp/Selyro-TV-signed.apk "$APK"
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK"
+      - name: Verify APK identity and version
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK" | tee /tmp/apk-badging.txt
+          grep -q "package: name='com.selyro.tv' versionCode='15'" /tmp/apk-badging.txt
+          grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
+          grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+      - name: Export updater APK and relay chunks
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p ci-artifacts relay/selyro
+          rm -f relay/selyro/apk.b64.part-*
+          cp "$APK" ci-artifacts/Selyro-TV-v0.3.5-lifecycle-hotfix.apk
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          sha256sum ci-artifacts/Selyro-TV-v0.3.5-lifecycle-hotfix.apk > ci-artifacts/Selyro-TV-v0.3.5-lifecycle-hotfix.sha256
+          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
+          cat > relay/selyro/manifest.env <<EOF
+          VERSION_CODE=15
+          VERSION_NAME=0.3.5-lifecycle-hotfix
+          SHA256=$SHA
+          NOTES=Lifecycle/task hotfix: prevents duplicate Selyro activity instances, stops active playback when the app leaves the screen, removes the task on final exit, and enables Android 12+ protection against third-party application overlays while preserving the 0.3.4 Live TV UX and Selyro identity.
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci-artifacts/Selyro-TV-v0.3.5-lifecycle-hotfix.apk ci-artifacts/Selyro-TV-v0.3.5-lifecycle-hotfix.sha256 relay/selyro
+          git commit -m 'Export stable-signed Selyro TV v0.3.5 lifecycle hotfix' || exit 0
+          git push origin HEAD:release/0.3.5-lifecycle-task-hotfix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Selyro-TV-v0.3.5-lifecycle-hotfix
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
