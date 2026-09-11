@@ -31,6 +31,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:banner="@drawable/selyro_tv_banner_asset"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:exported="true"
             android:screenOrientation="landscape">
