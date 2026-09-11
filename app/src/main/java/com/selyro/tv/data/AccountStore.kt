@@ -136,6 +136,41 @@ class AccountStore(context: Context) {
     }
     fun recents(): List<String> = prefs.getString("recent", "").orEmpty().split('|').filter { it.isNotBlank() }
 
+    private fun accountSuffix(account: PlaylistAccount): String =
+        "${account.type}:${account.server.trim()}:${account.username}".hashCode().toString()
+
+    fun setLastLive(account: PlaylistAccount, channelId: String, group: String) {
+        if (channelId.isBlank()) return
+        val suffix = accountSuffix(account)
+        prefs.edit()
+            .putString("last_live_id_$suffix", channelId)
+            .putString("last_live_group_$suffix", group)
+            .apply()
+    }
+
+    fun lastLiveId(account: PlaylistAccount?): String? {
+        account ?: return null
+        return prefs.getString("last_live_id_${accountSuffix(account)}", null)?.takeIf { it.isNotBlank() }
+    }
+
+    fun lastLiveGroup(account: PlaylistAccount?): String? {
+        account ?: return null
+        return prefs.getString("last_live_group_${accountSuffix(account)}", null)?.takeIf { it.isNotBlank() }
+    }
+
+    fun addSearchTerm(term: String) {
+        val clean = term.trim()
+        if (clean.length < 2) return
+        val list = searchHistory().filterNot { it.equals(clean, ignoreCase = true) }.toMutableList()
+        list.add(0, clean)
+        prefs.edit().putString("search_history_v1", list.take(10).joinToString("|")).apply()
+    }
+
+    fun searchHistory(): List<String> = prefs.getString("search_history_v1", "").orEmpty()
+        .split('|').map { it.trim() }.filter { it.isNotBlank() }.take(10)
+
+    fun clearSearchHistory() { prefs.edit().remove("search_history_v1").apply() }
+
     fun playbackProfile(): StreamingProfile = runCatching {
         StreamingProfile.valueOf(prefs.getString("playback_profile", StreamingProfile.BALANCED.name).orEmpty())
     }.getOrDefault(StreamingProfile.BALANCED)
