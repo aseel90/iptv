@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.selyro.tv.data.AccountStore
 import com.selyro.tv.data.AppLanguage
 import com.selyro.tv.data.DisplayMode
+import com.selyro.tv.data.PlaybackProgress
 import com.selyro.tv.iptv.M3uClient
 import com.selyro.tv.iptv.XtreamClient
 import com.selyro.tv.model.*
@@ -37,6 +38,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val playbackProfile = MutableStateFlow(store.playbackProfile())
     val language = MutableStateFlow(store.language())
     val displayMode = MutableStateFlow(store.displayMode())
+    val playbackProgress = MutableStateFlow(store.playbackProgress())
     val addingAccount = MutableStateFlow(false)
 
     private var epgJob: Job? = null
@@ -197,6 +199,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun markWatched(kind: String, id: String) {
         store.addRecent("$kind:$id")
         recents.value = store.recents()
+    }
+
+    fun resumePosition(kind: String, id: String): Long =
+        if (kind == "live") 0L else playbackProgress.value["$kind:$id"]?.positionMs ?: 0L
+
+    fun progressFor(kind: String, id: String): PlaybackProgress? =
+        playbackProgress.value["$kind:$id"]
+
+    fun savePlaybackProgress(kind: String, id: String, positionMs: Long, durationMs: Long) {
+        if (kind == "live") return
+        store.setPlaybackProgress("$kind:$id", positionMs, durationMs)
+        playbackProgress.value = store.playbackProgress()
+    }
+
+    fun clearPlaybackProgress(kind: String, id: String) {
+        store.clearPlaybackProgress("$kind:$id")
+        playbackProgress.value = store.playbackProgress()
     }
 
     fun setPlaybackProfile(profile: StreamingProfile) {

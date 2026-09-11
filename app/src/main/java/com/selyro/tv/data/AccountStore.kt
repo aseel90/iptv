@@ -10,6 +10,10 @@ import org.json.JSONObject
 enum class AppLanguage { ENGLISH, ARABIC }
 enum class DisplayMode { LIST, GRID }
 
+data class PlaybackProgress(val positionMs: Long, val durationMs: Long, val updatedAtMs: Long = System.currentTimeMillis()) {
+    val fraction: Float get() = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+}
+
 class AccountStore(context: Context) {
     private val secrets by lazy(LazyThreadSafetyMode.NONE) { SecretStore() }
     private val prefs = context.getSharedPreferences("selyro", Context.MODE_PRIVATE)
@@ -142,4 +146,56 @@ class AccountStore(context: Context) {
 
     fun displayMode(): DisplayMode = runCatching { DisplayMode.valueOf(prefs.getString("display_mode", DisplayMode.LIST.name).orEmpty()) }.getOrDefault(DisplayMode.LIST)
     fun setDisplayMode(value: DisplayMode) { prefs.edit().putString("display_mode", value.name).apply() }
+
+    fun playbackProgress(): Map<String, PlaybackProgress> {
+        val raw = prefs.getString("playback_progress_v1", null) ?: return emptyMap()
+        return runCatching {
+            val root = JSONObject(raw)
+            buildMap {
+                val keys = root.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val item = root.optJSONObject(key) ?: continue
+                    val position = item.optLong("position", 0L).coerceAtLeast(0L)
+                    val duration = item.optLong("duration", 0L).coerceAtLeast(0L)
+                    val updated = item.optLong("updated", 0L)
+                    if (position > 0L && duration > 0L) put(key, PlaybackProgress(position, duration, updated))
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun setPlaybackProgress(key: String, positionMs: Long, durationMs: Long) {
+        if (key.isBlank()) return
+        val safePosition = positionMs.coerceAtLeast(0L)
+        val safeDuration = durationMs.coerceAtLeast(0L)
+        val root = runCatching { JSONObject(prefs.getString("playback_progress_v1", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val completed = safeDuration > 0L && (safePosition >= safeDuration - 60_000L || safePosition.toDouble() / safeDuration >= 0.95)
+        if (safeDuration <= 0L || safePosition < 10_000L || completed) {
+            root.remove(key)
+        } else {
+            root.put(key, JSONObject().apply {
+                put("position", safePosition)
+                put("duration", safeDuration)
+                put("updated", System.currentTimeMillis())
+            })
+        }
+
+        if (root.length() > 200) {
+            val ordered = mutableListOf<Pair<String, Long>>()
+            val keys = root.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                ordered += k to (root.optJSONObject(k)?.optLong("updated", 0L) ?: 0L)
+            }
+            ordered.sortedByDescending { it.second }.drop(200).forEach { root.remove(it.first) }
+        }
+        prefs.edit().putString("playback_progress_v1", root.toString()).apply()
+    }
+
+    fun clearPlaybackProgress(key: String) {
+        val root = runCatching { JSONObject(prefs.getString("playback_progress_v1", "{}") ?: "{}") }.getOrDefault(JSONObject())
+        root.remove(key)
+        prefs.edit().putString("playback_progress_v1", root.toString()).apply()
+    }
 }

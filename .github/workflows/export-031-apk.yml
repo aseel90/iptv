@@ -1,0 +1,98 @@
+name: Export Selyro TV 0.3.1 APK
+
+on:
+  push:
+    branches: ['release/0.3.1-polish']
+    paths-ignore:
+      - 'ci-artifacts/**'
+      - 'relay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.1-polish
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Gradle 8.13
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Test lint and build with diagnostic log
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace 2>&1 | tee /tmp/selyro-031-build.log
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" -ne 0 ]; then
+            mkdir -p ci-artifacts
+            cp /tmp/selyro-031-build.log ci-artifacts/Selyro-TV-v0.3.1-build-failure.log
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add ci-artifacts/Selyro-TV-v0.3.1-build-failure.log
+            git commit -m 'Capture Selyro TV 0.3.1 build failure' || true
+            git push origin HEAD:release/0.3.1-polish || true
+            exit "$RC"
+          fi
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Re-sign with same stable Selyro QA key as 0.2.8
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          $ANDROID_HOME/build-tools/36.0.0/apksigner sign --key /tmp/selyro-testkey.pk8 --cert /tmp/selyro-testkey.x509.pem --out /tmp/Selyro-TV-signed.apk "$APK"
+          mv /tmp/Selyro-TV-signed.apk "$APK"
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK" | tee /tmp/apk-signer.txt
+          grep -q 'Signer #1 certificate SHA-256 digest:' /tmp/apk-signer.txt
+      - name: Verify APK identity launcher TV banner and version
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK" | tee /tmp/apk-badging.txt
+          grep -q "package: name='com.selyro.tv' versionCode='11'" /tmp/apk-badging.txt
+          grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
+          grep -q "launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+          grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+      - name: Export updater APK and relay chunks
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p ci-artifacts relay/selyro
+          rm -f ci-artifacts/Selyro-TV-v0.3.1-build-failure.log relay/selyro/apk.b64.part-*
+          cp "$APK" ci-artifacts/Selyro-TV-v0.3.1-polish.apk
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          sha256sum ci-artifacts/Selyro-TV-v0.3.1-polish.apk > ci-artifacts/Selyro-TV-v0.3.1-polish.sha256
+          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
+          cat > relay/selyro/manifest.env <<EOF
+          VERSION_CODE=11
+          VERSION_NAME=0.3.1-polish
+          SHA256=$SHA
+          NOTES=Polish update preserving the new Selyro identity while adding localized player controls, resume playback with progress indicators, audio/subtitle track selection, stronger reconnect behavior and refined TV navigation.
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci-artifacts/Selyro-TV-v0.3.1-polish.apk ci-artifacts/Selyro-TV-v0.3.1-polish.sha256 relay/selyro
+          git commit -m 'Export stable-signed Selyro TV v0.3.1 polish' || exit 0
+          git push origin HEAD:release/0.3.1-polish
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Selyro-TV-v0.3.1-polish
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
