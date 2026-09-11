@@ -3,6 +3,7 @@ package com.selyro.tv.player
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -13,7 +14,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
     private val mainHandler = Handler(Looper.getMainLooper())
     private var currentProfile = initialProfile
     private var retryCount = 0
-    private val maxRetries = 3
+    private val maxRetries = 5
 
     private val reconnectListener = object : Player.Listener {
         override fun onPlayerError(error: PlaybackException) {
@@ -32,7 +33,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
     private fun newPlayer(profile: StreamingProfile): ExoPlayer =
         PlayerFactory.create(appContext, profile).also { it.addListener(reconnectListener) }
 
-    fun play(url: String, title: String? = null) {
+    fun play(url: String, title: String? = null, startPositionMs: Long = 0L) {
         retryCount = 0
         mainHandler.removeCallbacksAndMessages(null)
         val item = MediaItem.Builder()
@@ -40,7 +41,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
             .setMediaId(url)
             .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setTitle(title).build())
             .build()
-        playerInternal.setMediaItem(item)
+        if (startPositionMs > 0L) playerInternal.setMediaItem(item, startPositionMs) else playerInternal.setMediaItem(item)
         playerInternal.prepare()
         playerInternal.playWhenReady = true
     }
@@ -67,11 +68,17 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         val delayMs = when (retryCount) {
             1 -> 750L
             2 -> 1_500L
-            else -> 3_000L
+            3 -> 3_000L
+            4 -> 5_000L
+            else -> 8_000L
         }
+        val resumePosition = if (playerInternal.isCurrentMediaItemSeekable && playerInternal.duration != C.TIME_UNSET) {
+            playerInternal.currentPosition.coerceAtLeast(0L)
+        } else 0L
         mainHandler.postDelayed({
             if (playerInternal.currentMediaItem != null) {
                 playerInternal.prepare()
+                if (resumePosition > 0L) playerInternal.seekTo(resumePosition)
                 playerInternal.playWhenReady = true
             }
         }, delayMs)
