@@ -11,6 +11,15 @@
 - Ensure deleting a server also clears only that server's cached state/history where appropriate, without affecting other servers.
 - Re-test first-launch and no-server states after the last server is deleted.
 
+## Next update — Favorites discoverability
+
+- Keep the existing Favorite toggle in channel details and the Live player OK menu.
+- Add a visible star/favorite action directly on Live channel rows so users can save a channel without starting playback first.
+- Make saved state obvious (filled star / Saved label) and allow removing from Favorites from the same control.
+- Add a short remote-control hint for the player Favorite action so the feature is discoverable.
+- Verify Favorites stays synchronized after server refresh/reload and across app restarts.
+- Keep D-pad focus predictable when toggling favorites from channel lists.
+
 ## 0.3.x — Stabilization and polish
 
 - Continue real-device testing across Android TV / Google TV / Xiaomi TV Stick layouts.
