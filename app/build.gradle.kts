@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.3.2-icon-hotfix"
+        versionCode = 13
+        versionName = "0.3.3-banner-hotfix"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

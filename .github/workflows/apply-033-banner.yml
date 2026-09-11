@@ -1,0 +1,59 @@
+name: Materialize Selyro TV 0.3.3 Banner
+
+on:
+  push:
+    branches: ['release/0.3.3-banner-hotfix']
+    paths:
+      - '.github/workflows/apply-033-banner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  banner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.3-banner-hotfix
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet pillow
+      - name: Generate valid 320x180 Selyro TV banner
+        run: |
+          python - <<'PY'
+          from PIL import Image, ImageDraw, ImageFont
+          from pathlib import Path
+          W,H=320,180
+          bg=(5,8,13); panel=(9,14,21); accent=(107,228,210); white=(245,248,251); muted=(154,169,184)
+          im=Image.new('RGB',(W,H),bg)
+          d=ImageDraw.Draw(im)
+          d.rectangle((0,0,100,H), fill=panel)
+          d.rectangle((99,24,100,H-24), fill=(20,34,46))
+          d.polygon([(18,63),(35,63),(57,90),(35,117),(18,117),(43,90)], fill=accent)
+          d.polygon([(62,63),(88,90),(62,117),(49,103),(64,90),(49,77)], fill=accent)
+          d.polygon([(41,73),(70,90),(41,107)], fill=white)
+          fp='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          f1=ImageFont.truetype(fp,32); f2=ImageFont.truetype(fp,21); f3=ImageFont.truetype(fp,11)
+          d.text((118,58),'SELYRO',font=f1,fill=white)
+          d.text((118,100),'TV',font=f2,fill=accent)
+          d.text((118,130),'SMART TV',font=f3,fill=muted)
+          out=Path('app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png')
+          out.parent.mkdir(parents=True, exist_ok=True)
+          im.save(out, format='PNG', optimize=True)
+          check=Image.open(out); check.verify()
+          check=Image.open(out)
+          assert check.size==(320,180) and check.mode=='RGB'
+          print(out, out.stat().st_size)
+          PY
+          file app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png | grep -q '320 x 180'
+      - name: Commit banner
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png
+          git commit -m 'fix(tv): replace truncated launcher banner with valid 320x180 asset' || exit 0
+          git push origin HEAD:release/0.3.3-banner-hotfix
