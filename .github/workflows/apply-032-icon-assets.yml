@@ -1,0 +1,93 @@
+name: Apply Selyro TV 0.3.2 Icon Assets
+
+on:
+  push:
+    branches: ['release/0.3.2-icon-hotfix']
+    paths-ignore:
+      - 'app/src/main/res/mipmap-mdpi/ic_launcher_tv.png'
+      - 'app/src/main/res/mipmap-hdpi/ic_launcher_tv.png'
+      - 'app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png'
+      - 'app/src/main/res/mipmap-xxhdpi/ic_launcher_tv.png'
+      - 'app/src/main/res/mipmap-xxxhdpi/ic_launcher_tv.png'
+      - 'ci-artifacts/**'
+      - 'relay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  raster-icons:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.2-icon-hotfix
+          fetch-depth: 0
+      - name: Install Pillow
+        run: python -m pip install --quiet pillow
+      - name: Generate Android TV raster launcher icons
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+
+          sizes = {
+              'mdpi': 80,
+              'hdpi': 120,
+              'xhdpi': 160,
+              'xxhdpi': 240,
+              'xxxhdpi': 320,
+          }
+
+          bg = '#05080D'
+          teal = '#6BE4D2'
+          white = '#FFFFFF'
+
+          left = [(16,31),(31,31),(51,54),(31,77),(16,77),(39,54)]
+          right = [(75,31),(96,54),(75,77),(63,65),(76,54),(63,43)]
+          play = [(44,39),(68,54),(44,69)]
+
+          def transform(points, scale):
+              # Mirrors the existing adaptive foreground group exactly:
+              # scale 0.78 + translate 11.88 on a 108x108 viewport.
+              return [((x*0.78+11.88)*scale, (y*0.78+11.88)*scale) for x,y in points]
+
+          for density, size in sizes.items():
+              supersample = 4
+              canvas = size * supersample
+              im = Image.new('RGB', (canvas, canvas), bg)
+              draw = ImageDraw.Draw(im)
+              s = canvas / 108.0
+              draw.polygon(transform(left, s), fill=teal)
+              draw.polygon(transform(right, s), fill=teal)
+              draw.polygon(transform(play, s), fill=white)
+              im = im.resize((size, size), Image.Resampling.LANCZOS)
+              out = Path(f'app/src/main/res/mipmap-{density}/ic_launcher_tv.png')
+              out.parent.mkdir(parents=True, exist_ok=True)
+              im.save(out, 'PNG', optimize=True)
+              assert im.size == (size, size)
+              assert im.getbbox() is not None
+              print(density, size, out)
+          PY
+      - name: Validate xhdpi icon size and opacity
+        run: |
+          python - <<'PY'
+          from PIL import Image
+          p='app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png'
+          im=Image.open(p)
+          assert im.size == (160,160), im.size
+          assert im.mode == 'RGB', im.mode
+          colors=im.getcolors(maxcolors=1000000)
+          assert colors and len(colors) > 3
+          print('TV launcher icon validated:', im.size, im.mode, len(colors), 'colors')
+          PY
+      - name: Commit generated raster icon resources
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/res/mipmap-*/ic_launcher_tv.png
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix(tv): add density-specific raster launcher icons'
+          git push origin HEAD:release/0.3.2-icon-hotfix

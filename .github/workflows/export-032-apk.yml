@@ -1,0 +1,109 @@
+name: Export Selyro TV 0.3.2 APK
+
+on:
+  push:
+    branches: ['release/0.3.2-icon-hotfix']
+    paths-ignore:
+      - 'ci-artifacts/**'
+      - 'relay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.2-icon-hotfix
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Gradle 8.13
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Verify TV launcher raster resources exist
+        run: |
+          set -euxo pipefail
+          test -s app/src/main/res/mipmap-mdpi/ic_launcher_tv.png
+          test -s app/src/main/res/mipmap-hdpi/ic_launcher_tv.png
+          test -s app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png
+          test -s app/src/main/res/mipmap-xxhdpi/ic_launcher_tv.png
+          test -s app/src/main/res/mipmap-xxxhdpi/ic_launcher_tv.png
+          file app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png | grep -q '160 x 160'
+          grep -q 'android:icon="@mipmap/ic_launcher_tv"' app/src/main/AndroidManifest.xml
+      - name: Test lint and build with diagnostic log
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
+          gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace 2>&1 | tee /tmp/selyro-032-build.log
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" -ne 0 ]; then
+            mkdir -p ci-artifacts
+            cp /tmp/selyro-032-build.log ci-artifacts/Selyro-TV-v0.3.2-build-failure.log
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add ci-artifacts/Selyro-TV-v0.3.2-build-failure.log
+            git commit -m 'Capture Selyro TV 0.3.2 build failure' || true
+            git push origin HEAD:release/0.3.2-icon-hotfix || true
+            exit "$RC"
+          fi
+          test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Re-sign with same stable Selyro QA key
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          $ANDROID_HOME/build-tools/36.0.0/apksigner sign --key /tmp/selyro-testkey.pk8 --cert /tmp/selyro-testkey.x509.pem --out /tmp/Selyro-TV-signed.apk "$APK"
+          mv /tmp/Selyro-TV-signed.apk "$APK"
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK" | tee /tmp/apk-signer.txt
+          grep -q 'Signer #1 certificate SHA-256 digest:' /tmp/apk-signer.txt
+      - name: Verify APK identity launcher and version
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK" | tee /tmp/apk-badging.txt
+          grep -q "package: name='com.selyro.tv' versionCode='12'" /tmp/apk-badging.txt
+          grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
+          grep -q "launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+          grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+          $ANDROID_HOME/build-tools/36.0.0/aapt dump resources "$APK" | grep -q 'mipmap/ic_launcher_tv'
+      - name: Export updater APK and relay chunks
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p ci-artifacts relay/selyro
+          rm -f ci-artifacts/Selyro-TV-v0.3.2-build-failure.log relay/selyro/apk.b64.part-*
+          cp "$APK" ci-artifacts/Selyro-TV-v0.3.2-icon-hotfix.apk
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          sha256sum ci-artifacts/Selyro-TV-v0.3.2-icon-hotfix.apk > ci-artifacts/Selyro-TV-v0.3.2-icon-hotfix.sha256
+          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
+          cat > relay/selyro/manifest.env <<EOF
+          VERSION_CODE=12
+          VERSION_NAME=0.3.2-icon-hotfix
+          SHA256=$SHA
+          NOTES=Android TV launcher icon hotfix. Adds density-specific raster launcher artwork for Xiaomi/Google TV launchers while preserving the Selyro identity, TV banner and all 0.3.1 playback polish.
+          EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci-artifacts/Selyro-TV-v0.3.2-icon-hotfix.apk ci-artifacts/Selyro-TV-v0.3.2-icon-hotfix.sha256 relay/selyro
+          git commit -m 'Export stable-signed Selyro TV v0.3.2 icon hotfix' || exit 0
+          git push origin HEAD:release/0.3.2-icon-hotfix
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Selyro-TV-v0.3.2-icon-hotfix
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
