@@ -1,0 +1,29 @@
+name: Apply Selyro 0.3.1 polish bindings
+
+on:
+  push:
+    branches: ['release/0.3.1-polish']
+    paths:
+      - 'tools/apply_031_polish.py'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.3.1-polish
+          fetch-depth: 0
+      - name: Apply safe targeted bindings
+        run: python tools/apply_031_polish.py
+      - name: Commit bindings
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          git diff --cached --quiet && exit 0
+          git commit -m 'feat(polish): bind resume progress and localized player UI'
+          git push origin HEAD:release/0.3.1-polish
