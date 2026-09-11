@@ -19,9 +19,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -47,6 +51,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,14 +64,25 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Text
 import com.selyro.tv.data.AppLanguage
+import com.selyro.tv.model.Channel
+import com.selyro.tv.model.EpgProgram
 import kotlinx.coroutines.delay
 import kotlin.math.max
 
 private val PlayerAccent = Color(0xFF6BE4D2)
 private val PlayerMuted = Color(0xFFB4C0CC)
 private val PlayerPanel = Color(0xE610171E)
+private val PlayerPanelStrong = Color(0xF20A1118)
 
 private enum class TrackTab { AUDIO, SUBTITLES }
+
+/** Context used only for Live TV. Movies/series keep the classic seek-first remote mapping. */
+data class LivePlayerContext(
+    val currentChannelId: String,
+    val channels: List<Channel>,
+    val epg: List<EpgProgram> = emptyList(),
+    val isFavorite: Boolean = false
+)
 
 private data class TrackOption(
     val label: String,
@@ -84,9 +100,13 @@ private fun pt(language: AppLanguage, en: String, ar: String): String =
 fun PlayerScreen(
     player: Player,
     language: AppLanguage,
+    liveContext: LivePlayerContext? = null,
+    onLiveTune: (Channel) -> Unit = {},
+    onToggleLiveFavorite: () -> Unit = {},
     onProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
+    val isLive = liveContext != null
     var controlsVisible by remember { mutableStateOf(true) }
     var interactionVersion by remember { mutableIntStateOf(0) }
     var position by remember { mutableLongStateOf(max(0L, player.currentPosition)) }
@@ -101,23 +121,36 @@ fun PlayerScreen(
     var trackTab by remember { mutableStateOf(TrackTab.AUDIO) }
     var trackCursor by remember { mutableIntStateOf(0) }
     var lastPersistAt by remember { mutableLongStateOf(0L) }
-    val focusRequester = remember { FocusRequester() }
 
-    val audioOptions = remember(tracksVersion, language) {
-        trackOptions(player, C.TRACK_TYPE_AUDIO, language)
+    var liveHubVisible by remember { mutableStateOf(false) }
+    var liveHubCursor by remember { mutableIntStateOf(0) }
+    var channelDrawerVisible by remember { mutableStateOf(false) }
+    var liveInfoVisible by remember { mutableStateOf(false) }
+    var drawerCursor by remember { mutableIntStateOf(0) }
+    var pendingZapIndex by remember { mutableIntStateOf(-1) }
+    var zapPreview by remember { mutableStateOf<Channel?>(null) }
+
+    val focusRequester = remember { FocusRequester() }
+    val audioOptions = remember(tracksVersion, language) { trackOptions(player, C.TRACK_TYPE_AUDIO, language) }
+    val subtitleOptions = remember(tracksVersion, language) { trackOptions(player, C.TRACK_TYPE_TEXT, language) }
+    val liveChannels = liveContext?.channels.orEmpty()
+    val currentLiveIndex = remember(liveContext?.currentChannelId, liveChannels) {
+        liveChannels.indexOfFirst { it.id == liveContext?.currentChannelId }.coerceAtLeast(0)
     }
-    val subtitleOptions = remember(tracksVersion, language) {
-        trackOptions(player, C.TRACK_TYPE_TEXT, language)
-    }
+    val currentLiveChannel = liveChannels.getOrNull(currentLiveIndex)
 
     fun currentOptions(): List<TrackOption> = if (trackTab == TrackTab.AUDIO) audioOptions else subtitleOptions
-
-    fun revealControls() {
-        controlsVisible = true
-        interactionVersion++
+    fun revealControls() { controlsVisible = true; interactionVersion++ }
+    fun closeLiveOverlays() {
+        liveHubVisible = false
+        channelDrawerVisible = false
+        liveInfoVisible = false
+        trackPanelVisible = false
+        revealControls()
     }
 
     fun persistProgress(force: Boolean = false) {
+        if (isLive) return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastPersistAt < 5_000L) return
         lastPersistAt = now
@@ -127,8 +160,7 @@ fun PlayerScreen(
     fun seekBy(deltaMs: Long) {
         val rawDuration = player.duration
         if (rawDuration == C.TIME_UNSET || rawDuration <= 0L || !player.isCurrentMediaItemSeekable) {
-            revealControls()
-            return
+            revealControls(); return
         }
         val next = (player.currentPosition + deltaMs).coerceIn(0L, rawDuration)
         player.seekTo(next)
@@ -148,14 +180,33 @@ fun PlayerScreen(
                 builder.setTrackTypeDisabled(type, false)
                 val group = option.group
                 val index = option.trackIndex
-                if (group != null && index != null) {
-                    builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index))
-                }
+                if (group != null && index != null) builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index))
             }
         }
         player.trackSelectionParameters = builder.build()
         trackPanelVisible = false
+        if (isLive) liveHubVisible = true
         revealControls()
+    }
+
+    fun openTrackPanel(tab: TrackTab) {
+        trackTab = tab
+        val options = if (tab == TrackTab.AUDIO) audioOptions else subtitleOptions
+        trackCursor = optionsIndexForSelected(options)
+        trackPanelVisible = true
+        liveHubVisible = false
+        channelDrawerVisible = false
+        liveInfoVisible = false
+        revealControls()
+    }
+
+    fun queueZap(delta: Int) {
+        if (liveChannels.isEmpty()) return
+        val base = if (pendingZapIndex in liveChannels.indices) pendingZapIndex else currentLiveIndex
+        pendingZapIndex = (base + delta + liveChannels.size) % liveChannels.size
+        zapPreview = liveChannels[pendingZapIndex]
+        controlsVisible = false
+        interactionVersion++
     }
 
     DisposableEffect(player) {
@@ -166,31 +217,18 @@ fun PlayerScreen(
                 bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
                 if (playbackState == Player.STATE_ENDED) persistProgress(force = true)
             }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playing = isPlaying
-                revealControls()
-            }
-
-            override fun onTracksChanged(tracks: Tracks) {
-                tracksVersion++
-            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (!isLive) revealControls() }
+            override fun onTracksChanged(tracks: Tracks) { tracksVersion++ }
         }
         player.addListener(listener)
-        onDispose {
-            persistProgress(force = true)
-            player.removeListener(listener)
-        }
+        onDispose { persistProgress(force = true); player.removeListener(listener) }
     }
 
     BackHandler {
-        if (trackPanelVisible) {
-            trackPanelVisible = false
-            revealControls()
-        } else {
-            persistProgress(force = true)
-            player.stop()
-            onBack()
+        when {
+            trackPanelVisible -> { trackPanelVisible = false; if (isLive) liveHubVisible = true; revealControls() }
+            liveInfoVisible || channelDrawerVisible || liveHubVisible -> closeLiveOverlays()
+            else -> { persistProgress(force = true); onBack() }
         }
     }
 
@@ -208,59 +246,90 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(controlsVisible, interactionVersion, playing, trackPanelVisible) {
-        if (controlsVisible && playing && !trackPanelVisible) {
-            val version = interactionVersion
-            delay(4_500)
-            if (version == interactionVersion) {
-                controlsVisible = false
-                seekHint = null
-            }
+    LaunchedEffect(liveContext?.currentChannelId) {
+        pendingZapIndex = -1
+        if (liveContext != null) {
+            drawerCursor = currentLiveIndex
+            zapPreview = currentLiveChannel
+            delay(1_400)
+            if (zapPreview?.id == liveContext.currentChannelId) zapPreview = null
         }
     }
 
-    LaunchedEffect(seekHint) {
-        if (seekHint != null) {
-            delay(1_100)
-            seekHint = null
+    // Smart Zap: rapid Up/Down presses only tune the final channel after a short debounce.
+    LaunchedEffect(pendingZapIndex, liveContext?.currentChannelId) {
+        if (isLive && pendingZapIndex in liveChannels.indices && pendingZapIndex != currentLiveIndex) {
+            val target = liveChannels[pendingZapIndex]
+            delay(220)
+            if (pendingZapIndex in liveChannels.indices && liveChannels[pendingZapIndex].id == target.id) onLiveTune(target)
         }
     }
+
+    LaunchedEffect(controlsVisible, interactionVersion, playing, trackPanelVisible, liveHubVisible, channelDrawerVisible, liveInfoVisible) {
+        if (controlsVisible && playing && !trackPanelVisible && !liveHubVisible && !channelDrawerVisible && !liveInfoVisible) {
+            val version = interactionVersion
+            delay(if (isLive) 3_500 else 4_500)
+            if (version == interactionVersion) { controlsVisible = false; seekHint = null }
+        }
+    }
+
+    LaunchedEffect(seekHint) { if (seekHint != null) { delay(1_100); seekHint = null } }
 
     Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .focusRequester(focusRequester)
-            .focusable()
+        Modifier.fillMaxSize().background(Color.Black).focusRequester(focusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
                 if (trackPanelVisible) {
                     when (event.key) {
-                        Key.DirectionLeft -> {
-                            trackTab = TrackTab.AUDIO
-                            trackCursor = optionsIndexForSelected(audioOptions)
+                        Key.DirectionLeft -> { trackTab = TrackTab.AUDIO; trackCursor = optionsIndexForSelected(audioOptions); true }
+                        Key.DirectionRight -> { trackTab = TrackTab.SUBTITLES; trackCursor = optionsIndexForSelected(subtitleOptions); true }
+                        Key.DirectionUp -> { val list = currentOptions(); if (list.isNotEmpty()) trackCursor = (trackCursor - 1 + list.size) % list.size; true }
+                        Key.DirectionDown -> { val list = currentOptions(); if (list.isNotEmpty()) trackCursor = (trackCursor + 1) % list.size; true }
+                        Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> { currentOptions().getOrNull(trackCursor)?.let(::selectTrack); true }
+                        else -> false
+                    }
+                } else if (channelDrawerVisible && isLive) {
+                    when (event.key) {
+                        Key.DirectionUp -> { if (liveChannels.isNotEmpty()) drawerCursor = (drawerCursor - 1 + liveChannels.size) % liveChannels.size; true }
+                        Key.DirectionDown -> { if (liveChannels.isNotEmpty()) drawerCursor = (drawerCursor + 1) % liveChannels.size; true }
+                        Key.DirectionCenter, Key.Enter -> {
+                            liveChannels.getOrNull(drawerCursor)?.let { target -> onLiveTune(target); zapPreview = target }
+                            channelDrawerVisible = false; true
+                        }
+                        Key.DirectionRight -> { channelDrawerVisible = false; revealControls(); true }
+                        else -> false
+                    }
+                } else if (liveInfoVisible && isLive) {
+                    when (event.key) {
+                        Key.DirectionLeft, Key.DirectionRight, Key.DirectionCenter, Key.Enter -> { liveInfoVisible = false; revealControls(); true }
+                        else -> true
+                    }
+                } else if (liveHubVisible && isLive) {
+                    when (event.key) {
+                        Key.DirectionLeft -> { liveHubCursor = (liveHubCursor - 1 + 5) % 5; true }
+                        Key.DirectionRight -> { liveHubCursor = (liveHubCursor + 1) % 5; true }
+                        Key.DirectionUp, Key.DirectionDown -> true
+                        Key.DirectionCenter, Key.Enter -> {
+                            when (liveHubCursor) {
+                                0 -> { channelDrawerVisible = true; drawerCursor = currentLiveIndex; liveHubVisible = false }
+                                1 -> openTrackPanel(TrackTab.AUDIO)
+                                2 -> openTrackPanel(TrackTab.SUBTITLES)
+                                3 -> { onToggleLiveFavorite(); revealControls() }
+                                4 -> { liveInfoVisible = true; liveHubVisible = false }
+                            }
                             true
                         }
-                        Key.DirectionRight -> {
-                            trackTab = TrackTab.SUBTITLES
-                            trackCursor = optionsIndexForSelected(subtitleOptions)
-                            true
-                        }
-                        Key.DirectionUp -> {
-                            val list = currentOptions()
-                            if (list.isNotEmpty()) trackCursor = (trackCursor - 1 + list.size) % list.size
-                            true
-                        }
-                        Key.DirectionDown -> {
-                            val list = currentOptions()
-                            if (list.isNotEmpty()) trackCursor = (trackCursor + 1) % list.size
-                            true
-                        }
-                        Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
-                            currentOptions().getOrNull(trackCursor)?.let(::selectTrack)
-                            true
-                        }
+                        else -> false
+                    }
+                } else if (isLive) {
+                    when (event.key) {
+                        Key.DirectionUp -> { queueZap(-1); true }
+                        Key.DirectionDown -> { queueZap(1); true }
+                        Key.DirectionLeft -> { channelDrawerVisible = true; drawerCursor = currentLiveIndex; controlsVisible = false; true }
+                        Key.DirectionRight -> { liveInfoVisible = true; controlsVisible = false; true }
+                        Key.DirectionCenter, Key.Enter -> { liveHubVisible = true; liveHubCursor = 0; controlsVisible = true; true }
+                        Key.MediaPlayPause -> { if (player.isPlaying) player.pause() else player.play(); true }
                         else -> false
                     }
                 } else {
@@ -269,21 +338,12 @@ fun PlayerScreen(
                         Key.DirectionRight -> { seekBy(10_000L); true }
                         Key.MediaRewind -> { seekBy(-30_000L); true }
                         Key.MediaFastForward -> { seekBy(30_000L); true }
-                        Key.DirectionCenter,
-                        Key.Enter,
-                        Key.MediaPlayPause -> {
-                            if (player.isPlaying) player.pause() else player.play()
-                            playing = player.isPlaying
-                            revealControls()
-                            true
+                        Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
+                            if (player.isPlaying) player.pause() else player.play(); playing = player.isPlaying; revealControls(); true
                         }
                         Key.DirectionDown -> {
                             revealControls()
-                            if (audioOptions.size > 1 || subtitleOptions.size > 1) {
-                                trackPanelVisible = true
-                                trackTab = TrackTab.AUDIO
-                                trackCursor = optionsIndexForSelected(audioOptions)
-                            }
+                            if (audioOptions.size > 1 || subtitleOptions.size > 1) openTrackPanel(TrackTab.AUDIO)
                             true
                         }
                         Key.DirectionUp -> { revealControls(); true }
@@ -299,103 +359,231 @@ fun PlayerScreen(
                     this.player = player
                     useController = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                    setKeepContentOnPlayerReset(true)
                     keepScreenOn = true
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT
-                    )
+                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 }
             },
             update = { it.player = player }
         )
 
-        AnimatedVisibility(
-            visible = controlsVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.Black.copy(alpha = 0.34f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.90f)
-                        )
-                    )
-                )
-            ) {
-                Column(
-                    Modifier.align(if (language == AppLanguage.ARABIC) Alignment.TopEnd else Alignment.TopStart)
-                        .padding(horizontal = 48.dp, vertical = 34.dp),
-                    horizontalAlignment = if (language == AppLanguage.ARABIC) Alignment.End else Alignment.Start
-                ) {
-                    Text("SELYRO TV", color = PlayerAccent, fontSize = 11.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        player.mediaMetadata.title?.toString().orEmpty().ifBlank {
-                            pt(language, "Now playing", "يتم التشغيل الآن")
-                        },
-                        color = Color.White,
-                        fontSize = 25.sp,
-                        maxLines = 1
-                    )
+        AnimatedVisibility(visible = controlsVisible && !channelDrawerVisible && !liveInfoVisible, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.34f), Color.Transparent, Color.Black.copy(alpha = 0.82f))))) {
+                Column(Modifier.align(Alignment.TopStart).padding(44.dp)) {
+                    Text(currentLiveChannel?.name ?: player.mediaMetadata.title?.toString().orEmpty().ifBlank { pt(language, "Now playing", "قيد التشغيل") }, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    if (isLive && !currentLiveChannel?.group.isNullOrBlank()) Text(currentLiveChannel?.group.orEmpty(), color = PlayerAccent, fontSize = 13.sp)
                 }
 
                 if (seekHint != null) {
-                    Box(
-                        Modifier.align(Alignment.Center)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.Black.copy(alpha = 0.76f))
-                            .padding(horizontal = 28.dp, vertical = 17.dp)
-                    ) {
+                    Box(Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.76f)).padding(horizontal = 28.dp, vertical = 17.dp)) {
                         Text(seekHint.orEmpty(), color = Color.White, fontSize = 25.sp)
-                    }
-                }
-
-                if (buffering) {
-                    Column(
-                        Modifier.align(Alignment.Center)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color.Black.copy(alpha = 0.78f))
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "${pt(language, "Buffering", "جاري التحميل")} $bufferPercent%",
-                            color = Color.White,
-                            fontSize = 14.sp
-                        )
-                        Spacer(Modifier.height(9.dp))
-                        Box(Modifier.width(180.dp).height(5.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.15f))) {
-                            Box(Modifier.fillMaxHeight().fillMaxWidth((bufferPercent / 100f).coerceIn(0.04f, 1f)).background(PlayerAccent))
-                        }
                     }
                 }
 
                 if (trackPanelVisible) {
                     PlayerTrackPanel(
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 164.dp),
-                        language = language,
-                        tab = trackTab,
-                        options = currentOptions(),
-                        cursor = trackCursor
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 150.dp),
+                        language = language, tab = trackTab, options = currentOptions(), cursor = trackCursor
                     )
                 }
 
-                ModernPlayerControls(
-                    Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 34.dp),
-                    language = language,
-                    position = position,
-                    duration = duration,
-                    buffered = buffered,
-                    playing = playing,
-                    seekable = player.isCurrentMediaItemSeekable,
-                    hasTrackControls = audioOptions.size > 1 || subtitleOptions.size > 1
-                )
+                if (isLive && liveHubVisible) {
+                    LiveControlHub(
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 48.dp, vertical = 122.dp),
+                        language = language,
+                        cursor = liveHubCursor,
+                        isFavorite = liveContext?.isFavorite == true,
+                        hasAudio = audioOptions.isNotEmpty(),
+                        hasSubtitles = subtitleOptions.size > 1
+                    )
+                }
+
+                if (isLive) {
+                    LivePlayerHints(Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 34.dp), language)
+                } else {
+                    ModernPlayerControls(
+                        Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 34.dp),
+                        language, position, duration, buffered, playing, player.isCurrentMediaItemSeekable,
+                        audioOptions.size > 1 || subtitleOptions.size > 1
+                    )
+                }
             }
         }
+
+        if (buffering) {
+            Column(
+                Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.78f)).padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("${pt(language, "Connecting", "جاري الاتصال")} $bufferPercent%", color = Color.White, fontSize = 14.sp)
+                Spacer(Modifier.height(9.dp))
+                Box(Modifier.width(180.dp).height(5.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.15f))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth((bufferPercent / 100f).coerceIn(0.04f, 1f)).background(PlayerAccent))
+                }
+            }
+        }
+
+        if (isLive && channelDrawerVisible) {
+            LiveChannelDrawer(Modifier.align(Alignment.CenterStart), language, liveChannels, drawerCursor, liveContext?.currentChannelId)
+        }
+
+        if (isLive && liveInfoVisible) {
+            LiveInfoPanel(Modifier.align(Alignment.CenterEnd), language, currentLiveChannel, liveContext?.epg.orEmpty())
+        }
+
+        if (isLive && zapPreview != null && !channelDrawerVisible && !liveInfoVisible && !liveHubVisible) {
+            LiveZapToast(Modifier.align(Alignment.Center), language, zapPreview!!)
+        }
+    }
+}
+
+@Composable
+private fun LivePlayerHints(modifier: Modifier, language: AppLanguage) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Text("● LIVE", color = PlayerAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(13.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Back  ${pt(language, "Channels", "القنوات")}", color = PlayerMuted, fontSize = 12.sp)
+                Text("↑↓  ${pt(language, "Change channel", "تغيير القناة")}", color = Color.White, fontSize = 12.sp)
+                Text("←  ${pt(language, "Channel list", "قائمة القنوات")}", color = PlayerMuted, fontSize = 12.sp)
+                Text("OK  ${pt(language, "Controls", "التحكم")}", color = Color.White, fontSize = 12.sp)
+                Text("→  ${pt(language, "Info", "معلومات")}", color = PlayerMuted, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveControlHub(
+    modifier: Modifier,
+    language: AppLanguage,
+    cursor: Int,
+    isFavorite: Boolean,
+    hasAudio: Boolean,
+    hasSubtitles: Boolean
+) {
+    val labels = listOf(
+        "☰  ${pt(language, "Channels", "القنوات")}",
+        "♫  ${pt(language, "Audio", "الصوت")}",
+        "CC  ${pt(language, "Subtitles", "الترجمة")}",
+        "${if (isFavorite) "★" else "☆"}  ${pt(language, "Favorite", "المفضلة")}",
+        "ⓘ  ${pt(language, "Info", "معلومات")}" 
+    )
+    Row(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(PlayerPanelStrong)
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp)).padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        labels.forEachIndexed { index, label ->
+            val enabled = when (index) { 1 -> hasAudio; 2 -> hasSubtitles; else -> true }
+            val focused = index == cursor
+            Box(
+                Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                    .background(if (focused) PlayerAccent else Color.White.copy(alpha = if (enabled) 0.08f else 0.035f))
+                    .padding(horizontal = 10.dp, vertical = 13.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(label, color = if (focused) Color.Black else if (enabled) Color.White else PlayerMuted.copy(alpha = .5f), fontSize = 12.sp, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveChannelDrawer(
+    modifier: Modifier,
+    language: AppLanguage,
+    channels: List<Channel>,
+    cursor: Int,
+    currentChannelId: String?
+) {
+    val state = rememberLazyListState()
+    LaunchedEffect(cursor) { if (cursor in channels.indices) state.animateScrollToItem(cursor) }
+    Column(
+        modifier.fillMaxHeight().width(430.dp).background(PlayerPanelStrong)
+            .padding(horizontal = 18.dp, vertical = 28.dp)
+    ) {
+        Text(pt(language, "CHANNELS", "القنوات"), color = PlayerAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+        LazyColumn(state = state, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            itemsIndexed(channels, key = { _, item -> item.id }) { index, channel ->
+                val focused = index == cursor
+                val playing = channel.id == currentChannelId
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(11.dp))
+                        .background(if (focused) PlayerAccent else if (playing) Color(0xFF183A37) else Color.White.copy(alpha = 0.055f))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.size(38.dp).clip(RoundedCornerShape(9.dp)).background(Color(0xFF17232C)), contentAlignment = Alignment.Center) {
+                        Text(channelMonogram(channel.name), color = if (focused) Color.Black else PlayerAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(channel.name, color = if (focused) Color.Black else Color.White, fontSize = 13.sp, maxLines = 1)
+                        Text(channel.group, color = if (focused) Color.Black.copy(alpha = .7f) else PlayerMuted, fontSize = 10.sp, maxLines = 1)
+                    }
+                    if (playing) Text("●", color = if (focused) Color.Black else PlayerAccent, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveInfoPanel(modifier: Modifier, language: AppLanguage, channel: Channel?, epg: List<EpgProgram>) {
+    Column(
+        modifier.width(430.dp).fillMaxHeight().background(PlayerPanelStrong).padding(horizontal = 22.dp, vertical = 32.dp)
+    ) {
+        Text(pt(language, "NOW PLAYING", "القناة الحالية"), color = PlayerAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(10.dp))
+        Text(channel?.name ?: pt(language, "Live channel", "قناة مباشرة"), color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+        if (!channel?.group.isNullOrBlank()) Text(channel?.group.orEmpty(), color = PlayerMuted, fontSize = 13.sp)
+        Spacer(Modifier.height(24.dp))
+        Text("EPG", color = PlayerAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        if (epg.isEmpty()) {
+            Text(pt(language, "No guide data available", "لا توجد بيانات للجدول"), color = PlayerMuted, fontSize = 13.sp)
+        } else {
+            epg.sortedBy { it.start }.take(5).forEach { program ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+                    Text(program.title.ifBlank { pt(language, "Program", "برنامج") }, color = Color.White, fontSize = 14.sp, maxLines = 1)
+                    if (!program.description.isNullOrBlank()) Text(program.description.orEmpty(), color = PlayerMuted, fontSize = 11.sp, maxLines = 2)
+                }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text(pt(language, "Press Back or → to close", "اضغط رجوع أو → للإغلاق"), color = PlayerMuted, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun LiveZapToast(modifier: Modifier, language: AppLanguage, channel: Channel) {
+    Row(
+        modifier.clip(RoundedCornerShape(18.dp)).background(Color.Black.copy(alpha = .84f))
+            .border(1.dp, PlayerAccent.copy(alpha = .45f), RoundedCornerShape(18.dp)).padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF17232C)), contentAlignment = Alignment.Center) {
+            Text(channelMonogram(channel.name), color = PlayerAccent, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(13.dp))
+        Column {
+            Text(channel.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(pt(language, "Switching channel…", "جاري تبديل القناة…"), color = PlayerMuted, fontSize = 11.sp)
+        }
+    }
+}
+
+private fun channelMonogram(name: String): String {
+    val parts = name.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    return when {
+        parts.size >= 2 -> "${parts[0].firstOrNull() ?: 'S'}${parts[1].firstOrNull() ?: 'T'}".uppercase()
+        name.isNotBlank() -> name.take(2).uppercase()
+        else -> "TV"
     }
 }
 
@@ -438,8 +626,7 @@ private fun ModernPlayerControls(
                 Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     Text("OK  ${pt(language, "Play / Pause", "تشغيل / إيقاف")}", color = PlayerMuted, fontSize = 12.sp)
                     if (hasTrackControls) {
-                        Spacer(Modifier.width(18.dp))
-                        Text("↓  ${pt(language, "Audio / Subtitles", "الصوت / الترجمة")}", color = PlayerMuted, fontSize = 12.sp)
+                        Spacer(Modifier.width(18.dp)); Text("↓  ${pt(language, "Audio / Subtitles", "الصوت / الترجمة")}", color = PlayerMuted, fontSize = 12.sp)
                     }
                 }
             }
@@ -448,13 +635,9 @@ private fun ModernPlayerControls(
 }
 
 @Composable
-private fun PlayerTrackPanel(
-    modifier: Modifier,
-    language: AppLanguage,
-    tab: TrackTab,
-    options: List<TrackOption>,
-    cursor: Int
-) {
+private fun PlayerTrackPanel(modifier: Modifier, language: AppLanguage, tab: TrackTab, options: List<TrackOption>, cursor: Int) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(cursor, options.size) { if (cursor in options.indices) listState.animateScrollToItem(cursor) }
     Column(
         modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(PlayerPanel)
             .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp)).padding(16.dp)
@@ -466,108 +649,69 @@ private fun PlayerTrackPanel(
             Text(pt(language, "← → switch   ↑ ↓ choose   OK apply", "← → تبديل   ↑ ↓ اختيار   OK تطبيق"), color = PlayerMuted, fontSize = 11.sp)
         }
         Spacer(Modifier.height(12.dp))
-        if (options.isEmpty()) {
-            Text(pt(language, "No tracks available", "لا توجد مسارات متاحة"), color = PlayerMuted, fontSize = 13.sp)
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.take(8).forEachIndexed { index, option ->
-                    val focused = index == cursor
-                    Box(
-                        Modifier.clip(RoundedCornerShape(10.dp))
-                            .background(if (focused) PlayerAccent else Color.White.copy(alpha = 0.08f))
-                            .border(
-                                if (option.selected && !focused) 1.dp else 0.dp,
-                                PlayerAccent,
-                                RoundedCornerShape(10.dp)
-                            )
-                            .padding(horizontal = 13.dp, vertical = 9.dp)
-                    ) {
-                        Text(
-                            option.label,
-                            color = if (focused) Color.Black else Color.White,
-                            fontSize = 12.sp,
-                            maxLines = 1
-                        )
-                    }
+        if (options.isEmpty()) Text(pt(language, "No tracks available", "لا توجد مسارات متاحة"), color = PlayerMuted, fontSize = 13.sp)
+        else LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().heightIn(max = 230.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            itemsIndexed(options) { index, option ->
+                val focused = index == cursor
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(if (focused) PlayerAccent else Color.White.copy(alpha = 0.08f))
+                        .border(if (option.selected && !focused) 1.dp else 0.dp, PlayerAccent, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 13.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(option.label, color = if (focused) Color.Black else Color.White, fontSize = 12.sp, maxLines = 1, modifier = Modifier.weight(1f))
+                    if (option.selected) Text("✓", color = if (focused) Color.Black else PlayerAccent, fontSize = 12.sp)
                 }
             }
         }
     }
 }
 
-@Composable
-private fun TrackTabChip(label: String, selected: Boolean) {
-    Box(
-        Modifier.clip(RoundedCornerShape(99.dp))
-            .background(if (selected) Color(0xFF244943) else Color.White.copy(alpha = 0.07f))
-            .padding(horizontal = 13.dp, vertical = 7.dp)
-    ) {
+@Composable private fun TrackTabChip(label: String, selected: Boolean) {
+    Box(Modifier.clip(RoundedCornerShape(99.dp)).background(if (selected) Color(0xFF244943) else Color.White.copy(alpha = 0.07f)).padding(horizontal = 13.dp, vertical = 7.dp)) {
         Text(label, color = if (selected) PlayerAccent else PlayerMuted, fontSize = 12.sp)
     }
 }
 
-@Composable
-private fun PlayerKeyHint(symbol: String, label: String) {
+@Composable private fun PlayerKeyHint(symbol: String, label: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(alpha = 0.13f)),
-            contentAlignment = Alignment.Center
-        ) { Text(symbol, color = Color.White, fontSize = 14.sp) }
-        if (label.isNotBlank()) {
-            Spacer(Modifier.width(7.dp))
-            Text(label, color = PlayerMuted, fontSize = 12.sp)
+        Box(Modifier.size(36.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
+            Text(symbol, color = Color.White, fontSize = 14.sp)
         }
+        if (label.isNotBlank()) { Spacer(Modifier.width(7.dp)); Text(label, color = PlayerMuted, fontSize = 12.sp) }
     }
 }
 
 @OptIn(UnstableApi::class)
 private fun trackOptions(player: Player, type: Int, language: AppLanguage): List<TrackOption> {
     val result = mutableListOf<TrackOption>()
-    if (type == C.TRACK_TYPE_AUDIO) {
-        result += TrackOption(pt(language, "Auto", "تلقائي"), special = "auto")
-    } else if (type == C.TRACK_TYPE_TEXT) {
+    if (type == C.TRACK_TYPE_AUDIO) result += TrackOption(pt(language, "Auto", "تلقائي"), special = "auto")
+    else if (type == C.TRACK_TYPE_TEXT) {
         val disabled = player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
         result += TrackOption(pt(language, "Off", "إيقاف"), selected = disabled, special = "off")
     }
-
     var ordinal = 1
     player.currentTracks.groups.filter { it.type == type }.forEach { group ->
         repeat(group.length) { index ->
             if (!group.isTrackSupported(index)) return@repeat
             val format = group.getTrackFormat(index)
             val prefix = if (type == C.TRACK_TYPE_AUDIO) pt(language, "Audio", "صوت") else pt(language, "Subtitle", "ترجمة")
-            val label = format.label?.takeIf { it.isNotBlank() }
-                ?: format.language?.takeIf { it.isNotBlank() }?.uppercase()
-                ?: "$prefix $ordinal"
-            result += TrackOption(
-                label = label,
-                group = group,
-                trackIndex = index,
-                selected = group.isTrackSelected(index)
-            )
+            val label = format.label?.takeIf { it.isNotBlank() } ?: format.language?.takeIf { it.isNotBlank() }?.uppercase() ?: "$prefix $ordinal"
+            result += TrackOption(label, group, index, group.isTrackSelected(index))
             ordinal++
         }
     }
-
-    if (type == C.TRACK_TYPE_AUDIO && result.none { it.selected && it.special == null }) {
-        result[0] = result[0].copy(selected = true)
-    }
+    if (type == C.TRACK_TYPE_AUDIO && result.none { it.selected && it.special == null } && result.isNotEmpty()) result[0] = result[0].copy(selected = true)
     return result
 }
 
-private fun optionsIndexForSelected(options: List<TrackOption>): Int =
-    options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: 0
-
-private fun normalizedDuration(player: Player): Long {
-    val rawDuration = player.duration
-    return if (rawDuration == C.TIME_UNSET || rawDuration < 0L) 0L else rawDuration
-}
-
+private fun optionsIndexForSelected(options: List<TrackOption>): Int = options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: 0
+private fun normalizedDuration(player: Player): Long = player.duration.let { if (it == C.TIME_UNSET || it < 0L) 0L else it }
 private fun formatPlayerTime(valueMs: Long): String {
     val totalSeconds = max(0L, valueMs) / 1000L
     val hours = totalSeconds / 3600L
     val minutes = (totalSeconds % 3600L) / 60L
     val seconds = totalSeconds % 60L
-    return if (hours > 0L) "%d:%02d:%02d".format(hours, minutes, seconds)
-    else "%02d:%02d".format(minutes, seconds)
+    return if (hours > 0L) "%d:%02d:%02d".format(hours, minutes, seconds) else "%02d:%02d".format(minutes, seconds)
 }
