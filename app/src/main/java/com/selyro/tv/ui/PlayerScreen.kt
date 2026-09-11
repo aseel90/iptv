@@ -1,5 +1,6 @@
 package com.selyro.tv.ui
 
+import android.os.SystemClock
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -7,6 +8,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,37 +46,82 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Text
+import com.selyro.tv.data.AppLanguage
 import kotlinx.coroutines.delay
 import kotlin.math.max
 
 private val PlayerAccent = Color(0xFF6BE4D2)
 private val PlayerMuted = Color(0xFFB4C0CC)
+private val PlayerPanel = Color(0xE610171E)
+
+private enum class TrackTab { AUDIO, SUBTITLES }
+
+private data class TrackOption(
+    val label: String,
+    val group: Tracks.Group? = null,
+    val trackIndex: Int? = null,
+    val selected: Boolean = false,
+    val special: String? = null
+)
+
+private fun pt(language: AppLanguage, en: String, ar: String): String =
+    if (language == AppLanguage.ARABIC) ar else en
 
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(player: Player, onBack: () -> Unit) {
+fun PlayerScreen(
+    player: Player,
+    language: AppLanguage,
+    onProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
+    onBack: () -> Unit
+) {
     var controlsVisible by remember { mutableStateOf(true) }
     var interactionVersion by remember { mutableIntStateOf(0) }
     var position by remember { mutableLongStateOf(max(0L, player.currentPosition)) }
-    var duration by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(normalizedDuration(player)) }
     var buffered by remember { mutableLongStateOf(max(0L, player.bufferedPosition)) }
     var playing by remember { mutableStateOf(player.isPlaying) }
     var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
     var bufferPercent by remember { mutableIntStateOf(player.bufferedPercentage.coerceIn(0, 100)) }
     var seekHint by remember { mutableStateOf<String?>(null) }
+    var tracksVersion by remember { mutableIntStateOf(0) }
+    var trackPanelVisible by remember { mutableStateOf(false) }
+    var trackTab by remember { mutableStateOf(TrackTab.AUDIO) }
+    var trackCursor by remember { mutableIntStateOf(0) }
+    var lastPersistAt by remember { mutableLongStateOf(0L) }
     val focusRequester = remember { FocusRequester() }
+
+    val audioOptions = remember(tracksVersion, language) {
+        trackOptions(player, C.TRACK_TYPE_AUDIO, language)
+    }
+    val subtitleOptions = remember(tracksVersion, language) {
+        trackOptions(player, C.TRACK_TYPE_TEXT, language)
+    }
+
+    fun currentOptions(): List<TrackOption> = if (trackTab == TrackTab.AUDIO) audioOptions else subtitleOptions
 
     fun revealControls() {
         controlsVisible = true
         interactionVersion++
+    }
+
+    fun persistProgress(force: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && now - lastPersistAt < 5_000L) return
+        lastPersistAt = now
+        onProgress(max(0L, player.currentPosition), normalizedDuration(player))
     }
 
     fun seekBy(deltaMs: Long) {
@@ -86,6 +134,27 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
         player.seekTo(next)
         position = next
         seekHint = if (deltaMs > 0L) "+${deltaMs / 1000}s" else "${deltaMs / 1000}s"
+        persistProgress(force = true)
+        revealControls()
+    }
+
+    fun selectTrack(option: TrackOption) {
+        val type = if (trackTab == TrackTab.AUDIO) C.TRACK_TYPE_AUDIO else C.TRACK_TYPE_TEXT
+        val builder = player.trackSelectionParameters.buildUpon().clearOverridesOfType(type)
+        when (option.special) {
+            "auto" -> builder.setTrackTypeDisabled(type, false)
+            "off" -> builder.setTrackTypeDisabled(type, true)
+            else -> {
+                builder.setTrackTypeDisabled(type, false)
+                val group = option.group
+                val index = option.trackIndex
+                if (group != null && index != null) {
+                    builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index))
+                }
+            }
+        }
+        player.trackSelectionParameters = builder.build()
+        trackPanelVisible = false
         revealControls()
     }
 
@@ -95,40 +164,54 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
                 buffering = playbackState == Player.STATE_BUFFERING
                 playing = player.isPlaying
                 bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
+                if (playbackState == Player.STATE_ENDED) persistProgress(force = true)
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playing = isPlaying
                 revealControls()
             }
+
+            override fun onTracksChanged(tracks: Tracks) {
+                tracksVersion++
+            }
         }
         player.addListener(listener)
-        onDispose { player.removeListener(listener) }
+        onDispose {
+            persistProgress(force = true)
+            player.removeListener(listener)
+        }
     }
 
     BackHandler {
-        player.stop()
-        onBack()
+        if (trackPanelVisible) {
+            trackPanelVisible = false
+            revealControls()
+        } else {
+            persistProgress(force = true)
+            player.stop()
+            onBack()
+        }
     }
 
     LaunchedEffect(player) {
         focusRequester.requestFocus()
         while (true) {
             position = max(0L, player.currentPosition)
-            val rawDuration = player.duration
-            duration = if (rawDuration == C.TIME_UNSET || rawDuration < 0L) 0L else rawDuration
+            duration = normalizedDuration(player)
             buffered = max(0L, player.bufferedPosition)
             bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
             playing = player.isPlaying
             buffering = player.playbackState == Player.STATE_BUFFERING
+            persistProgress()
             delay(350)
         }
     }
 
-    LaunchedEffect(controlsVisible, interactionVersion, playing) {
-        if (controlsVisible && playing) {
+    LaunchedEffect(controlsVisible, interactionVersion, playing, trackPanelVisible) {
+        if (controlsVisible && playing && !trackPanelVisible) {
             val version = interactionVersion
-            delay(4000)
+            delay(4_500)
             if (version == interactionVersion) {
                 controlsVisible = false
                 seekHint = null
@@ -138,7 +221,7 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
 
     LaunchedEffect(seekHint) {
         if (seekHint != null) {
-            delay(1100)
+            delay(1_100)
             seekHint = null
         }
     }
@@ -151,22 +234,61 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                when (event.key) {
-                    Key.DirectionLeft -> { seekBy(-10_000L); true }
-                    Key.DirectionRight -> { seekBy(10_000L); true }
-                    Key.MediaRewind -> { seekBy(-30_000L); true }
-                    Key.MediaFastForward -> { seekBy(30_000L); true }
-                    Key.DirectionCenter,
-                    Key.Enter,
-                    Key.MediaPlayPause -> {
-                        if (player.isPlaying) player.pause() else player.play()
-                        playing = player.isPlaying
-                        revealControls()
-                        true
+
+                if (trackPanelVisible) {
+                    when (event.key) {
+                        Key.DirectionLeft -> {
+                            trackTab = TrackTab.AUDIO
+                            trackCursor = optionsIndexForSelected(audioOptions)
+                            true
+                        }
+                        Key.DirectionRight -> {
+                            trackTab = TrackTab.SUBTITLES
+                            trackCursor = optionsIndexForSelected(subtitleOptions)
+                            true
+                        }
+                        Key.DirectionUp -> {
+                            val list = currentOptions()
+                            if (list.isNotEmpty()) trackCursor = (trackCursor - 1 + list.size) % list.size
+                            true
+                        }
+                        Key.DirectionDown -> {
+                            val list = currentOptions()
+                            if (list.isNotEmpty()) trackCursor = (trackCursor + 1) % list.size
+                            true
+                        }
+                        Key.DirectionCenter, Key.Enter, Key.MediaPlayPause -> {
+                            currentOptions().getOrNull(trackCursor)?.let(::selectTrack)
+                            true
+                        }
+                        else -> false
                     }
-                    Key.DirectionUp,
-                    Key.DirectionDown -> { revealControls(); true }
-                    else -> false
+                } else {
+                    when (event.key) {
+                        Key.DirectionLeft -> { seekBy(-10_000L); true }
+                        Key.DirectionRight -> { seekBy(10_000L); true }
+                        Key.MediaRewind -> { seekBy(-30_000L); true }
+                        Key.MediaFastForward -> { seekBy(30_000L); true }
+                        Key.DirectionCenter,
+                        Key.Enter,
+                        Key.MediaPlayPause -> {
+                            if (player.isPlaying) player.pause() else player.play()
+                            playing = player.isPlaying
+                            revealControls()
+                            true
+                        }
+                        Key.DirectionDown -> {
+                            revealControls()
+                            if (audioOptions.size > 1 || subtitleOptions.size > 1) {
+                                trackPanelVisible = true
+                                trackTab = TrackTab.AUDIO
+                                trackCursor = optionsIndexForSelected(audioOptions)
+                            }
+                            true
+                        }
+                        Key.DirectionUp -> { revealControls(); true }
+                        else -> false
+                    }
                 }
             }
     ) {
@@ -197,18 +319,24 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
                         listOf(
-                            Color.Black.copy(alpha = 0.38f),
+                            Color.Black.copy(alpha = 0.34f),
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.86f)
+                            Color.Black.copy(alpha = 0.90f)
                         )
                     )
                 )
             ) {
-                Column(Modifier.align(Alignment.TopStart).padding(horizontal = 48.dp, vertical = 34.dp)) {
+                Column(
+                    Modifier.align(if (language == AppLanguage.ARABIC) Alignment.TopEnd else Alignment.TopStart)
+                        .padding(horizontal = 48.dp, vertical = 34.dp),
+                    horizontalAlignment = if (language == AppLanguage.ARABIC) Alignment.End else Alignment.Start
+                ) {
                     Text("SELYRO TV", color = PlayerAccent, fontSize = 11.sp)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        player.mediaMetadata.title?.toString().orEmpty().ifBlank { "Now playing" },
+                        player.mediaMetadata.title?.toString().orEmpty().ifBlank {
+                            pt(language, "Now playing", "يتم التشغيل الآن")
+                        },
                         color = Color.White,
                         fontSize = 25.sp,
                         maxLines = 1
@@ -234,7 +362,11 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
                             .padding(horizontal = 24.dp, vertical = 16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Buffering $bufferPercent%", color = Color.White, fontSize = 14.sp)
+                        Text(
+                            "${pt(language, "Buffering", "جاري التحميل")} $bufferPercent%",
+                            color = Color.White,
+                            fontSize = 14.sp
+                        )
                         Spacer(Modifier.height(9.dp))
                         Box(Modifier.width(180.dp).height(5.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.15f))) {
                             Box(Modifier.fillMaxHeight().fillMaxWidth((bufferPercent / 100f).coerceIn(0.04f, 1f)).background(PlayerAccent))
@@ -242,13 +374,25 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
                     }
                 }
 
+                if (trackPanelVisible) {
+                    PlayerTrackPanel(
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 164.dp),
+                        language = language,
+                        tab = trackTab,
+                        options = currentOptions(),
+                        cursor = trackCursor
+                    )
+                }
+
                 ModernPlayerControls(
-                    Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 36.dp),
+                    Modifier.align(Alignment.BottomCenter).padding(horizontal = 52.dp, vertical = 34.dp),
+                    language = language,
                     position = position,
                     duration = duration,
                     buffered = buffered,
                     playing = playing,
-                    seekable = player.isCurrentMediaItemSeekable
+                    seekable = player.isCurrentMediaItemSeekable,
+                    hasTrackControls = audioOptions.size > 1 || subtitleOptions.size > 1
                 )
             }
         }
@@ -258,38 +402,107 @@ fun PlayerScreen(player: Player, onBack: () -> Unit) {
 @Composable
 private fun ModernPlayerControls(
     modifier: Modifier,
+    language: AppLanguage,
     position: Long,
     duration: Long,
     buffered: Long,
     playing: Boolean,
-    seekable: Boolean
+    seekable: Boolean,
+    hasTrackControls: Boolean
 ) {
-    Column(modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(if (seekable) formatPlayerTime(position) else "LIVE", color = Color.White, fontSize = 14.sp)
-            Text(if (seekable) formatPlayerTime(duration) else "● LIVE", color = if (seekable) PlayerMuted else PlayerAccent, fontSize = 14.sp)
-        }
-        Spacer(Modifier.height(9.dp))
-        val playedFraction = if (duration > 0L) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
-        val bufferedFraction = if (duration > 0L) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
-        Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.16f))) {
-            Box(Modifier.fillMaxHeight().fillMaxWidth(bufferedFraction).background(Color.White.copy(alpha = 0.32f)))
-            Box(Modifier.fillMaxHeight().fillMaxWidth(playedFraction).background(PlayerAccent))
-        }
-        Spacer(Modifier.height(17.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PlayerKeyHint("◀", if (seekable) "-10s" else "")
-            Spacer(Modifier.width(16.dp))
-            Box(Modifier.size(48.dp).clip(CircleShape).background(Color.White), contentAlignment = Alignment.Center) {
-                Text(if (playing) "Ⅱ" else "▶", color = Color.Black, fontSize = 21.sp)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(if (seekable) formatPlayerTime(position) else "LIVE", color = Color.White, fontSize = 14.sp)
+                Text(if (seekable) formatPlayerTime(duration) else "● LIVE", color = if (seekable) PlayerMuted else PlayerAccent, fontSize = 14.sp)
             }
-            Spacer(Modifier.width(16.dp))
-            PlayerKeyHint("▶", if (seekable) "+10s" else "")
-            Spacer(Modifier.width(26.dp))
-            Text("OK  Play / Pause", color = PlayerMuted, fontSize = 13.sp)
-            Spacer(Modifier.width(22.dp))
-            Text("Back  Exit", color = PlayerMuted, fontSize = 13.sp)
+            Spacer(Modifier.height(9.dp))
+            val playedFraction = if (duration > 0L) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            val bufferedFraction = if (duration > 0L) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.16f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(bufferedFraction).background(Color.White.copy(alpha = 0.32f)))
+                Box(Modifier.fillMaxHeight().fillMaxWidth(playedFraction).background(PlayerAccent))
+            }
+            Spacer(Modifier.height(17.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(pt(language, "Back  Exit", "رجوع  خروج"), color = PlayerMuted, fontSize = 12.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    PlayerKeyHint("◀", if (seekable) "-10s" else "")
+                    Box(Modifier.size(52.dp).clip(CircleShape).background(Color.White), contentAlignment = Alignment.Center) {
+                        Text(if (playing) "Ⅱ" else "▶", color = Color.Black, fontSize = 22.sp)
+                    }
+                    PlayerKeyHint("▶", if (seekable) "+10s" else "")
+                }
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    Text("OK  ${pt(language, "Play / Pause", "تشغيل / إيقاف")}", color = PlayerMuted, fontSize = 12.sp)
+                    if (hasTrackControls) {
+                        Spacer(Modifier.width(18.dp))
+                        Text("↓  ${pt(language, "Audio / Subtitles", "الصوت / الترجمة")}", color = PlayerMuted, fontSize = 12.sp)
+                    }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun PlayerTrackPanel(
+    modifier: Modifier,
+    language: AppLanguage,
+    tab: TrackTab,
+    options: List<TrackOption>,
+    cursor: Int
+) {
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(PlayerPanel)
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp)).padding(16.dp)
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            TrackTabChip(pt(language, "Audio", "الصوت"), tab == TrackTab.AUDIO)
+            TrackTabChip(pt(language, "Subtitles", "الترجمة"), tab == TrackTab.SUBTITLES)
+            Spacer(Modifier.weight(1f))
+            Text(pt(language, "← → switch   ↑ ↓ choose   OK apply", "← → تبديل   ↑ ↓ اختيار   OK تطبيق"), color = PlayerMuted, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(12.dp))
+        if (options.isEmpty()) {
+            Text(pt(language, "No tracks available", "لا توجد مسارات متاحة"), color = PlayerMuted, fontSize = 13.sp)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.take(8).forEachIndexed { index, option ->
+                    val focused = index == cursor
+                    Box(
+                        Modifier.clip(RoundedCornerShape(10.dp))
+                            .background(if (focused) PlayerAccent else Color.White.copy(alpha = 0.08f))
+                            .border(
+                                if (option.selected && !focused) 1.dp else 0.dp,
+                                PlayerAccent,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .padding(horizontal = 13.dp, vertical = 9.dp)
+                    ) {
+                        Text(
+                            option.label,
+                            color = if (focused) Color.Black else Color.White,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackTabChip(label: String, selected: Boolean) {
+    Box(
+        Modifier.clip(RoundedCornerShape(99.dp))
+            .background(if (selected) Color(0xFF244943) else Color.White.copy(alpha = 0.07f))
+            .padding(horizontal = 13.dp, vertical = 7.dp)
+    ) {
+        Text(label, color = if (selected) PlayerAccent else PlayerMuted, fontSize = 12.sp)
     }
 }
 
@@ -297,7 +510,7 @@ private fun ModernPlayerControls(
 private fun PlayerKeyHint(symbol: String, label: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
-            Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(alpha = 0.13f)),
+            Modifier.size(36.dp).clip(RoundedCornerShape(9.dp)).background(Color.White.copy(alpha = 0.13f)),
             contentAlignment = Alignment.Center
         ) { Text(symbol, color = Color.White, fontSize = 14.sp) }
         if (label.isNotBlank()) {
@@ -305,6 +518,49 @@ private fun PlayerKeyHint(symbol: String, label: String) {
             Text(label, color = PlayerMuted, fontSize = 12.sp)
         }
     }
+}
+
+@OptIn(UnstableApi::class)
+private fun trackOptions(player: Player, type: Int, language: AppLanguage): List<TrackOption> {
+    val result = mutableListOf<TrackOption>()
+    if (type == C.TRACK_TYPE_AUDIO) {
+        result += TrackOption(pt(language, "Auto", "تلقائي"), special = "auto")
+    } else if (type == C.TRACK_TYPE_TEXT) {
+        val disabled = player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+        result += TrackOption(pt(language, "Off", "إيقاف"), selected = disabled, special = "off")
+    }
+
+    var ordinal = 1
+    player.currentTracks.groups.filter { it.type == type }.forEach { group ->
+        repeat(group.length) { index ->
+            if (!group.isTrackSupported(index)) return@repeat
+            val format = group.getTrackFormat(index)
+            val prefix = if (type == C.TRACK_TYPE_AUDIO) pt(language, "Audio", "صوت") else pt(language, "Subtitle", "ترجمة")
+            val label = format.label?.takeIf { it.isNotBlank() }
+                ?: format.language?.takeIf { it.isNotBlank() }?.uppercase()
+                ?: "$prefix $ordinal"
+            result += TrackOption(
+                label = label,
+                group = group,
+                trackIndex = index,
+                selected = group.isTrackSelected(index)
+            )
+            ordinal++
+        }
+    }
+
+    if (type == C.TRACK_TYPE_AUDIO && result.none { it.selected && it.special == null }) {
+        result[0] = result[0].copy(selected = true)
+    }
+    return result
+}
+
+private fun optionsIndexForSelected(options: List<TrackOption>): Int =
+    options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: 0
+
+private fun normalizedDuration(player: Player): Long {
+    val rawDuration = player.duration
+    return if (rawDuration == C.TIME_UNSET || rawDuration < 0L) 0L else rawDuration
 }
 
 private fun formatPlayerTime(valueMs: Long): String {
