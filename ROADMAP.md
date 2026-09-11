@@ -1,22 +1,27 @@
 # Selyro TV Roadmap
 
-> Current stable baseline: 0.3.4 Live TV UX. The immediate stabilization priority is lifecycle/task correctness: one app activity instance, no background playback after leaving Selyro, deterministic exit behavior, and overlay protection where Android supports it.
+> Current stable baseline: 0.3.6 Performance & UX. The immediate priority is validating the new playback/search/EPG/resume work on real Android TV devices, then tightening server-management UX without regressing playback stability.
+
+## Next update — server management polish
+
+- Allow deleting an individual server even when it is the only configured server.
+- Show a confirmation dialog before deleting a server.
+- Add Edit Server so URL / username / password / display name can be corrected without deleting and re-adding the account.
+- Keep Clear All Servers as a separate, clearly destructive action with confirmation.
+- Ensure deleting a server also clears only that server's cached state/history where appropriate, without affecting other servers.
+- Re-test first-launch and no-server states after the last server is deleted.
 
 ## 0.3.x — Stabilization and polish
 
-- Fix lifecycle/task behavior so launcher relaunches do not stack duplicate MainActivity instances.
-- Stop active playback when Selyro is no longer visible.
-- Ensure Exit removes the app task instead of revealing an older hidden instance.
-- Block third-party application overlays on Android 12+ using the platform HIDE_OVERLAY_WINDOWS protection.
 - Continue real-device testing across Android TV / Google TV / Xiaomi TV Stick layouts.
 - Verify D-pad focus, accessibility, Live TV zap behavior, playback/reconnect, resume state, tracks and memory stability.
+- Verify the 0.3.6 Live retry/watchdog and offline-state behavior on weak or intermittent streams.
+- Verify Continue Watching / resume and unified search across multiple providers.
 - Prefer regression fixes over speculative feature growth.
 
 ## 0.4 — Library and discovery UX candidates
 
-- Continue Watching.
 - Improved recents.
-- Cross-content search.
 - Sorting and filters.
 - Hide categories.
 - Additional loading/empty/error state polish.
@@ -28,7 +33,6 @@
 - Better playback diagnostics.
 - Buffering/profile refinement.
 - Preferred audio/subtitle tracks.
-- Optional next-episode flow.
 - Long-session stability testing.
 
 ## 0.6 — User controls candidates
