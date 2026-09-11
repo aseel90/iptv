@@ -1,5 +1,6 @@
 name: Export Selyro TV 0.3.2 APK
 
+# The raster TV launcher assets are materialized before this export is expected to pass.
 on:
   push:
     branches: ['release/0.3.2-icon-hotfix']
