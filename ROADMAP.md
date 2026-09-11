@@ -1,161 +1,78 @@
 # Selyro TV Roadmap
 
-Last updated: 2026-09-11
-Current stable version: **0.3.1-polish** (`versionCode 11`)
-Package: `com.selyro.tv`
+> Current stable baseline: 0.3.4 Live TV UX. The immediate stabilization priority is lifecycle/task correctness: one app activity instance, no background playback after leaving Selyro, deterministic exit behavior, and overlay protection where Android supports it.
 
-## Product direction
+## 0.3.x — Stabilization and polish
 
-Selyro TV is an Android TV / Smart TV IPTV player focused on fast navigation, reliable playback, clear remote-control UX, and a modern TV-first interface. The roadmap deliberately avoids feature bloat: stability, playback quality, and TV usability come before adding more screens.
+- Fix lifecycle/task behavior so launcher relaunches do not stack duplicate MainActivity instances.
+- Stop active playback when Selyro is no longer visible.
+- Ensure Exit removes the app task instead of revealing an older hidden instance.
+- Block third-party application overlays on Android 12+ using the platform HIDE_OVERLAY_WINDOWS protection.
+- Continue real-device testing across Android TV / Google TV / Xiaomi TV Stick layouts.
+- Verify D-pad focus, accessibility, Live TV zap behavior, playback/reconnect, resume state, tracks and memory stability.
+- Prefer regression fixes over speculative feature growth.
 
-## Current stable baseline — 0.3.1
+## 0.4 — Library and discovery UX candidates
 
-Completed and considered part of the stable baseline:
-
-- Xtream IPTV flows for Live TV, Movies and Series.
-- Modern Selyro visual identity, launcher icon and Android TV banner.
-- Arabic and English UI with RTL/LTR support.
-- Grid/List library modes.
-- Series details and playable episode flows.
-- Favorites and recent content.
-- Multi-server/account support.
-- In-app update channel with version and SHA-256 verification.
-- TV remote/D-pad optimized focus states.
-- Modern player overlay and seek controls.
-- Resume playback and visible progress.
-- Audio and subtitle track selection.
-- Reconnect/retry behavior for playback interruptions.
-- Stable-signed upgrade path for the current test line.
-
-## 0.3.x — Stability and polish only
-
-No large new features should be added in this line.
-
-Priority work:
-
-- Test 720p/1080p/4K layouts on common Android TV devices.
-- Test Xiaomi TV Stick under low-memory and weak-network conditions.
-- Verify focus restoration after dialogs, player exit, search and navigation changes.
-- Improve accessibility labels and readable focus contrast.
-- Refine playback error messages in Arabic and English.
-- Test resume state across app restart and server switching.
-- Test subtitle/audio switching on different stream/container formats.
-- Reduce unnecessary recompositions and image-memory pressure where measurable.
-- Add regression tests for Movies, Series, Live TV and updater flows.
-
-## 0.4 — Library and discovery UX
-
-Only after 0.3.x has been used without major regressions.
-
-Planned candidates:
-
-- Continue Watching row on Home.
-- Better Recently Watched management.
-- Search across Movies / Series / Live channels.
-- Improved sorting and category filters.
-- Optional hide/show categories.
-- Better empty/loading/error states.
-- More polished movie/series detail pages without changing the current Selyro identity.
+- Continue Watching.
+- Improved recents.
+- Cross-content search.
+- Sorting and filters.
+- Hide categories.
+- Additional loading/empty/error state polish.
 
 ## 0.5 — Playback reliability
 
-- More granular retry/backoff strategy.
-- Better handling of expired/changed stream URLs.
-- Stream startup diagnostics for unsupported codecs/containers.
-- Improve buffering behavior for medium and weak connections without excessive latency.
-- Remember preferred audio/subtitle language when appropriate.
-- Optional next-episode flow for Series.
-- Validate long playback sessions and memory stability.
+- Retry/backoff refinement.
+- Expired URL handling.
+- Better playback diagnostics.
+- Buffering/profile refinement.
+- Preferred audio/subtitle tracks.
+- Optional next-episode flow.
+- Long-session stability testing.
 
-## 0.6 — User controls
+## 0.6 — User controls candidates
 
-Candidates, not commitments:
-
-- Parental PIN and category lock.
-- Profiles only if real user demand exists.
+- Parental PIN.
+- Profiles only if real user demand justifies them.
 - Per-server preferences.
-- Optional playback defaults.
-- Backup/restore of non-sensitive app preferences.
+- Playback defaults.
+- Backup/restore of non-sensitive preferences.
 
-## 1.0 — Production release readiness
+## 1.0 — Production readiness
 
-Before a commercial/public release:
+- Feature freeze and full regression pass.
+- Android TV requirements review.
+- Privacy policy and release documentation.
+- Permissions/security audit.
+- Private source repository.
+- Separate public update distribution.
+- Private production signing key with a documented backup/recovery plan.
+- Repeatable release workflow.
 
-- Freeze core playback behavior and run a full regression pass.
-- Verify Android TV / Google TV launcher requirements and store metadata.
-- Prepare Privacy Policy and end-user documentation.
-- Review permissions and remove anything not required.
-- Run dependency/security audit.
-- Move source code to a private repository.
-- Separate public update distribution from private source code.
-- Use a dedicated production signing key stored securely outside the repository.
-- Document signing-key backup and recovery procedure.
-- Create repeatable signed release workflow with versionCode checks, SHA-256 validation and changelog generation.
+## Source and release architecture
 
-## Repository and update architecture
-
-### Private source repository
-
-`aseel90/iptv` is the private source repository target. The public update path has now been separated from this repository, so it can be made **private** without breaking the current 0.3.1 update download flow.
-
-It should contain:
-
-- Android/Kotlin source code.
-- CI workflows.
-- Internal QA documentation.
-- Product roadmap.
-- Private release tooling.
-
-### Public update distribution
-
-The app must still be able to download updates without GitHub authentication. Therefore, do **not** depend on a private repository raw URL for APK downloads.
-
-Recommended options:
-
-1. **Dedicated public repository**, e.g. `aseel90/selyro-releases`, containing only:
-   - `latest.json`
-   - signed APK files
-   - SHA-256 files
-   - release notes
-
-2. **Cloudflare R2 / custom update domain** for APK and manifest hosting.
-
-No source code, credentials, signing keys, provider data or internal documentation should be published in the public distribution channel.
-
-### Current public update channel
-
-The current updater reads its manifest from:
-
-`aseel90/FeatherFury-LaB/selyro-updates/latest.json`
-
-As of 0.3.1, the public channel now hosts both the signed APK and the manifest inside `FeatherFury-LaB`, so `aseel90/iptv` no longer needs to remain public for existing installs to download updates.
-
-This is intentionally a temporary distribution arrangement. The preferred long-term layout is a dedicated public `selyro-releases` repository or a Cloudflare R2/custom update domain, while keeping all application source code private.
+- `aseel90/iptv` is the private-source target.
+- The public update path is separated from source so the app can update without exposing the source repository.
+- Current public update channel: `aseel90/FeatherFury-LaB/selyro-updates/latest.json`.
+- Long-term preferred distribution: a dedicated public `selyro-releases` repository or Cloudflare R2/custom update domain.
+- Public distribution must not contain source code, credentials, signing keys, provider data or internal documentation.
 
 ## Signing policy
 
-- Never commit a production keystore/private signing key to GitHub.
-- Every normal upgrade must use the same trusted signing identity or a properly planned key-rotation mechanism.
-- `versionCode` must always increase.
-- Test direct upgrades from older supported versions to the newest release.
-- Keep an offline encrypted backup of the production signing key and credentials.
+The current QA/stable builds use the AOSP platform test certificate so test installations can update in place. This identity is public and is not suitable for production/commercial distribution. Before production release, migrate to a private production signing key and document the migration path for testers.
 
 ## Release checklist
 
-For every release:
-
-1. Bump `versionCode` and `versionName`.
-2. Run compile, unit tests, Android lint and diagnostics.
-3. Build the signed APK.
-4. Verify package name and version metadata.
-5. Verify APK signature.
-6. Calculate SHA-256.
-7. Test install/update over the previous stable version.
-8. Smoke-test Home, Live, Movies, Series, Favorites, Resume, Audio/Subtitles and Settings.
-9. Publish APK to the public update distribution channel.
-10. Update `latest.json` only after the APK is successfully available.
-11. Keep source repository private and release distribution source-free.
+1. Build succeeds.
+2. Unit tests pass.
+3. Android lint passes.
+4. Diagnostic/smoke checks pass.
+5. Signed APK is exported and checksum verified.
+6. Update metadata points to the correct public APK and checksum.
+7. Upgrade from the previous stable version is tested.
+8. Core remote-control flows are tested on a real TV device.
 
 ## Development rule
 
-If the current stable build works well, prefer fixing real user-reported problems over adding speculative features. New features should only enter the roadmap when they materially improve playback reliability, TV navigation, discovery, safety or maintainability.
+Fix real user-reported problems first. Keep changes small enough to test, preserve the current Selyro visual identity, and avoid feature growth that risks playback stability.
