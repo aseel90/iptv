@@ -96,7 +96,7 @@ Before a commercial/public release:
 
 ### Private source repository
 
-`aseel90/iptv` should become **private** once the update channel is moved away from raw files in this repository.
+`aseel90/iptv` is the private source repository target. The public update path has now been separated from this repository, so it can be made **private** without breaking the current 0.3.1 update download flow.
 
 It should contain:
 
@@ -122,13 +122,15 @@ Recommended options:
 
 No source code, credentials, signing keys, provider data or internal documentation should be published in the public distribution channel.
 
-### Current temporary dependency
+### Current public update channel
 
 The current updater reads its manifest from:
 
 `aseel90/FeatherFury-LaB/selyro-updates/latest.json`
 
-The current manifest points to an APK hosted in `aseel90/iptv`. This must be migrated before making `iptv` private, otherwise existing installs will lose the ability to download updates.
+As of 0.3.1, the public channel now hosts both the signed APK and the manifest inside `FeatherFury-LaB`, so `aseel90/iptv` no longer needs to remain public for existing installs to download updates.
+
+This is intentionally a temporary distribution arrangement. The preferred long-term layout is a dedicated public `selyro-releases` repository or a Cloudflare R2/custom update domain, while keeping all application source code private.
 
 ## Signing policy
 
