@@ -1,0 +1,27 @@
+name: Cleanup Selyro 0.3.4 staging
+
+on:
+  push:
+    branches: ["release/0.3.4-live-tv-ux-v2"]
+    paths:
+      - ".github/workflows/cleanup-034-staging.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Remove temporary staging data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -rf .selyro-034 || true
+          git rm .github/workflows/cleanup-034-staging.yml
+          git commit -m "chore(live): remove temporary 0.3.4 staging data"
+          git push
