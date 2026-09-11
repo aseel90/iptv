@@ -1,0 +1,91 @@
+name: Apply 0.3.5 lifecycle task hotfix
+
+on:
+  push:
+    branches:
+      - release/0.3.5-lifecycle-task-hotfix
+    paths:
+      - .github/workflows/apply-035-lifecycle.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply lifecycle, task and overlay fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path('app/src/main/AndroidManifest.xml')
+          s = manifest.read_text()
+          old = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n'
+          assert old in s
+          if 'android.permission.HIDE_OVERLAY_WINDOWS' not in s:
+              s = s.replace(old, old + '    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />\n')
+          old_activity = '            android:exported="true"\n            android:screenOrientation="landscape">'
+          assert old_activity in s or 'android:launchMode="singleTask"' in s
+          if 'android:launchMode="singleTask"' not in s:
+              s = s.replace(old_activity, '            android:exported="true"\n            android:launchMode="singleTask"\n            android:screenOrientation="landscape">')
+          manifest.write_text(s)
+
+          main = Path('app/src/main/java/com/selyro/tv/MainActivity.kt')
+          s = main.read_text()
+          if 'import android.content.Intent' not in s:
+              s = s.replace('import android.graphics.Color\nimport android.os.Bundle\n', 'import android.content.Intent\nimport android.graphics.Color\nimport android.os.Build\nimport android.os.Bundle\n')
+          marker = '        super.onCreate(savedInstanceState)\n        CrashReporter.markStage(this, "activity:onCreate:ready")\n'
+          assert marker in s or 'setHideOverlayWindows(true)' in s
+          if 'setHideOverlayWindows(true)' not in s:
+              s = s.replace(marker, '        super.onCreate(savedInstanceState)\n        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {\n            window.setHideOverlayWindows(true)\n        }\n        CrashReporter.markStage(this, "activity:onCreate:ready")\n')
+          resume = '''    override fun onResume() {\n        super.onResume()\n        Log.i("SelyroStartup", "activity:onResume")\n    }\n'''
+          if 'override fun onNewIntent' not in s:
+              assert resume in s
+              s = s.replace(resume, '''    override fun onNewIntent(intent: Intent) {\n        super.onNewIntent(intent)\n        setIntent(intent)\n        Log.i("SelyroStartup", "activity:onNewIntent:reused")\n    }\n\n    override fun onResume() {\n        super.onResume()\n        Log.i("SelyroStartup", "activity:onResume")\n    }\n\n    override fun onStop() {\n        super.onStop()\n        Log.i("SelyroStartup", "activity:onStop")\n    }\n''')
+          main.write_text(s)
+
+          app = Path('app/src/main/java/com/selyro/tv/ui/SelyroApp.kt')
+          s = app.read_text()
+          if 'import androidx.activity.ComponentActivity' not in s:
+              s = s.replace('import androidx.activity.compose.BackHandler\n', 'import androidx.activity.ComponentActivity\nimport androidx.activity.compose.BackHandler\n')
+          if 'import androidx.lifecycle.LifecycleEventObserver' not in s:
+              s = s.replace('import androidx.lifecycle.viewmodel.compose.viewModel\n', 'import androidx.lifecycle.Lifecycle\nimport androidx.lifecycle.LifecycleEventObserver\nimport androidx.lifecycle.viewmodel.compose.viewModel\n')
+          context_line = '    val context = LocalContext.current.applicationContext\n'
+          if 'val hostActivity = localContext as? ComponentActivity' not in s:
+              assert context_line in s
+              s = s.replace(context_line, '    val localContext = LocalContext.current\n    val context = localContext.applicationContext\n    val hostActivity = localContext as? ComponentActivity\n')
+          old_dispose = '    DisposableEffect(Unit) { onDispose { playback?.release(); playback = null } }\n'
+          if 'Lifecycle.Event.ON_STOP' not in s:
+              assert old_dispose in s
+              s = s.replace(old_dispose, '''    DisposableEffect(hostActivity) {\n        val observer = LifecycleEventObserver { _, event ->\n            if (event == Lifecycle.Event.ON_STOP) {\n                playback?.stop()\n                playing = null\n            }\n        }\n        hostActivity?.lifecycle?.addObserver(observer)\n        onDispose {\n            hostActivity?.lifecycle?.removeObserver(observer)\n            playback?.release()\n            playback = null\n        }\n    }\n''')
+          s = s.replace('(context as? Activity)?.finish()', '(context as? Activity)?.finishAndRemoveTask()')
+          app.write_text(s)
+
+          gradle = Path('app/build.gradle.kts')
+          s = gradle.read_text()
+          s = s.replace('versionCode = 14', 'versionCode = 15')
+          s = s.replace('versionName = "0.3.4-live-tv-ux"', 'versionName = "0.3.5-lifecycle-hotfix"')
+          gradle.write_text(s)
+          PY
+
+          grep -q 'android.permission.HIDE_OVERLAY_WINDOWS' app/src/main/AndroidManifest.xml
+          grep -q 'android:launchMode="singleTask"' app/src/main/AndroidManifest.xml
+          grep -q 'setHideOverlayWindows(true)' app/src/main/java/com/selyro/tv/MainActivity.kt
+          grep -q 'Lifecycle.Event.ON_STOP' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'finishAndRemoveTask()' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'versionCode = 15' app/build.gradle.kts
+
+      - name: Commit source changes
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/AndroidManifest.xml app/src/main/java/com/selyro/tv/MainActivity.kt app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/build.gradle.kts
+          git commit -m 'fix(lifecycle): prevent duplicate tasks and background playback' || exit 0
+          git push
