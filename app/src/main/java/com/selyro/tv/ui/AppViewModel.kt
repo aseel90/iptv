@@ -11,11 +11,24 @@ import com.selyro.tv.iptv.M3uClient
 import com.selyro.tv.iptv.XtreamClient
 import com.selyro.tv.model.*
 import com.selyro.tv.player.StreamingProfile
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
+
+
+enum class ConnectionGrade { CHECKING, EXCELLENT, GOOD, WEAK, OFFLINE }
+
+data class ServerConnectionQuality(
+    val grade: ConnectionGrade,
+    val latencyMs: Long? = null,
+    val checkedAtMs: Long = System.currentTimeMillis()
+)
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val store = AccountStore(app)
@@ -40,16 +53,56 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val displayMode = MutableStateFlow(store.displayMode())
     val playbackProgress = MutableStateFlow(store.playbackProgress())
     val addingAccount = MutableStateFlow(false)
-    val lastLiveId = MutableStateFlow(store.lastLiveId(_account.value))
-    val lastLiveGroup = MutableStateFlow(store.lastLiveGroup(_account.value))
-    val searchHistory = MutableStateFlow(store.searchHistory())
+    val serverQualities = MutableStateFlow<Map<String, ServerConnectionQuality>>(emptyMap())
 
-    private val epgJobs = mutableMapOf<String, Job>()
-    private val epgLoadedAt = mutableMapOf<String, Long>()
-    private val epgCacheTtlMs = 10 * 60 * 1000L
+    private var epgJob: Job? = null
 
     init {
         if (_account.value != null) loadLive()
+        probeServers()
+    }
+
+    private fun accountKey(account: PlaylistAccount): String =
+        "${account.type}:${account.server.trim()}:${account.username}"
+
+    fun qualityFor(account: PlaylistAccount): ServerConnectionQuality? = serverQualities.value[accountKey(account)]
+
+    fun probeServers() {
+        accounts.value.forEach { target ->
+            val key = accountKey(target)
+            if (serverQualities.value[key]?.grade == ConnectionGrade.CHECKING) return@forEach
+            serverQualities.value = serverQualities.value + (key to ServerConnectionQuality(ConnectionGrade.CHECKING))
+            viewModelScope.launch {
+                val result = withContext(Dispatchers.IO) { probeServer(target) }
+                serverQualities.value = serverQualities.value + (key to result)
+            }
+        }
+    }
+
+    private fun probeServer(account: PlaylistAccount): ServerConnectionQuality {
+        val started = System.nanoTime()
+        return runCatching {
+            val url = URL(account.server.trim())
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 4_000
+                readTimeout = 4_000
+                instanceFollowRedirects = true
+                requestMethod = "HEAD"
+                setRequestProperty("User-Agent", "Selyro-TV/${com.selyro.tv.BuildConfig.VERSION_NAME}")
+            }
+            try {
+                connection.responseCode
+                val latency = ((System.nanoTime() - started) / 1_000_000L).coerceAtLeast(1L)
+                val grade = when {
+                    latency <= 250L -> ConnectionGrade.EXCELLENT
+                    latency <= 900L -> ConnectionGrade.GOOD
+                    else -> ConnectionGrade.WEAK
+                }
+                ServerConnectionQuality(grade, latency)
+            } finally {
+                connection.disconnect()
+            }
+        }.getOrElse { ServerConnectionQuality(ConnectionGrade.OFFLINE, null) }
     }
 
     fun login(account: PlaylistAccount) {
@@ -73,14 +126,52 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 store.save(account)
                 accounts.value = store.accounts()
                 _account.value = account
-                lastLiveId.value = store.lastLiveId(account)
-                lastLiveGroup.value = store.lastLiveGroup(account)
+                probeServers()
                 channels.value = loadedChannels
                 movies.value = emptyList()
                 series.value = emptyList()
-                clearEpgCache()
+                epgByChannel.value = emptyMap()
                 selectedSeriesDetails.value = null
                 addingAccount.value = false
+            }.onFailure { error.value = friendlyError(it) }
+            loading.value = false
+        }
+    }
+
+    fun updateAccount(original: PlaylistAccount, updated: PlaylistAccount) {
+        viewModelScope.launch {
+            loading.value = true
+            error.value = null
+            runCatching {
+                val loadedChannels: List<Channel>
+                val loadedProvider: ProviderInfo?
+                when (updated.type) {
+                    SourceType.XTREAM -> {
+                        require(updated.username.isNotBlank() && updated.password.isNotBlank()) { "Username and password are required" }
+                        val client = XtreamClient(updated)
+                        loadedProvider = client.authenticate() ?: error("Server login failed")
+                        loadedChannels = client.live()
+                    }
+                    SourceType.M3U -> {
+                        loadedProvider = null
+                        loadedChannels = M3uClient.fetch(updated.server).channels
+                    }
+                }
+                require(loadedChannels.isNotEmpty()) { "No live channels were returned" }
+                val wasActive = _account.value == original
+                store.replace(original, updated)
+                accounts.value = store.accounts()
+                if (wasActive) {
+                    _account.value = updated
+                    providerInfo.value = loadedProvider
+                    channels.value = loadedChannels
+                    movies.value = emptyList()
+                    series.value = emptyList()
+                    epgByChannel.value = emptyMap()
+                    selectedSeriesDetails.value = null
+                }
+                serverQualities.value = serverQualities.value - accountKey(original)
+                probeServers()
             }.onFailure { error.value = friendlyError(it) }
             loading.value = false
         }
@@ -89,16 +180,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun beginAddAccount() {
         addingAccount.value = true
         _account.value = null
-        lastLiveId.value = null
-        lastLiveGroup.value = null
         error.value = null
     }
 
     fun cancelAddAccount() {
         addingAccount.value = false
         _account.value = store.load()
-        lastLiveId.value = store.lastLiveId(_account.value)
-        lastLiveGroup.value = store.lastLiveGroup(_account.value)
         if (_account.value != null && channels.value.isEmpty()) loadLive(force = true)
     }
 
@@ -106,13 +193,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (_account.value == target) return
         store.setActive(target)
         _account.value = target
-        lastLiveId.value = store.lastLiveId(target)
-        lastLiveGroup.value = store.lastLiveGroup(target)
         channels.value = emptyList()
         movies.value = emptyList()
         series.value = emptyList()
         providerInfo.value = null
-        clearEpgCache()
+        epgByChannel.value = emptyMap()
         selectedSeriesDetails.value = null
         error.value = null
         loadLive(force = true)
@@ -122,18 +207,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val wasActive = _account.value == target
         store.remove(target)
         accounts.value = store.accounts()
+        serverQualities.value = serverQualities.value - accountKey(target)
         if (wasActive) {
             _account.value = store.load()
-            lastLiveId.value = store.lastLiveId(_account.value)
-            lastLiveGroup.value = store.lastLiveGroup(_account.value)
             channels.value = emptyList()
             movies.value = emptyList()
             series.value = emptyList()
             providerInfo.value = null
-            clearEpgCache()
+            epgByChannel.value = emptyMap()
             selectedSeriesDetails.value = null
             if (_account.value != null) loadLive(force = true)
         }
+        probeServers()
     }
 
     fun loadLive(force: Boolean = false) {
@@ -191,45 +276,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSeriesDetails() { selectedSeriesDetails.value = null }
 
-    private fun clearEpgCache() {
-        epgJobs.values.forEach { it.cancel() }
-        epgJobs.clear()
-        epgLoadedAt.clear()
-        epgByChannel.value = emptyMap()
-    }
-
-    fun loadEpg(channel: Channel, force: Boolean = false) {
+    fun loadEpg(channel: Channel) {
         val account = _account.value ?: return
-        if (account.type != SourceType.XTREAM) return
-        val now = System.currentTimeMillis()
-        val fresh = epgByChannel.value.containsKey(channel.id) &&
-            now - (epgLoadedAt[channel.id] ?: 0L) < epgCacheTtlMs
-        if (!force && fresh) return
-        epgJobs[channel.id]?.cancel()
-        epgJobs[channel.id] = viewModelScope.launch {
-            delay(180)
-            val list = XtreamClient(account).shortEpg(channel.id, limit = 8)
+        if (account.type != SourceType.XTREAM || epgByChannel.value.containsKey(channel.id)) return
+        epgJob?.cancel()
+        epgJob = viewModelScope.launch {
+            delay(300)
+            val list = XtreamClient(account).shortEpg(channel.id)
             epgByChannel.value = epgByChannel.value + (channel.id to list)
-            epgLoadedAt[channel.id] = System.currentTimeMillis()
-            epgJobs.remove(channel.id)
         }
-    }
-
-    fun rememberLive(channel: Channel) {
-        val account = _account.value ?: return
-        store.setLastLive(account, channel.id, channel.group)
-        lastLiveId.value = channel.id
-        lastLiveGroup.value = channel.group
-    }
-
-    fun rememberSearch(term: String) {
-        store.addSearchTerm(term)
-        searchHistory.value = store.searchHistory()
-    }
-
-    fun clearSearchHistory() {
-        store.clearSearchHistory()
-        searchHistory.value = emptyList()
     }
 
     fun toggleFavorite(kind: String, id: String) {
@@ -287,11 +342,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         movies.value = emptyList()
         series.value = emptyList()
         providerInfo.value = null
-        clearEpgCache()
+        epgByChannel.value = emptyMap()
         selectedSeriesDetails.value = null
-        lastLiveId.value = null
-        lastLiveGroup.value = null
         error.value = null
+        serverQualities.value = emptyMap()
     }
 
     fun clearError() { error.value = null }

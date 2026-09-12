@@ -18,14 +18,30 @@ class AccountStore(context: Context) {
     private val secrets by lazy(LazyThreadSafetyMode.NONE) { SecretStore() }
     private val prefs = context.getSharedPreferences("selyro", Context.MODE_PRIVATE)
 
+    private fun accountKey(account: PlaylistAccount): String =
+        "${account.type}:${account.server.trim()}:${account.username}"
+
     fun save(account: PlaylistAccount) {
         val all = accounts().toMutableList()
-        val key: (PlaylistAccount) -> String = { "${it.type}:${it.server.trim()}:${it.username}" }
-        val index = all.indexOfFirst { key(it) == key(account) }
+        val index = all.indexOfFirst { accountKey(it) == accountKey(account) }
         if (index >= 0) all[index] = account else all += account
         writeAccounts(all)
-        prefs.edit().putInt("active_account", all.indexOfFirst { key(it) == key(account) }).apply()
+        prefs.edit().putInt("active_account", all.indexOfFirst { accountKey(it) == accountKey(account) }).apply()
         writeLegacy(account)
+    }
+
+    fun replace(original: PlaylistAccount, updated: PlaylistAccount) {
+        val all = accounts().toMutableList()
+        val index = all.indexOfFirst { accountKey(it) == accountKey(original) }
+        if (index < 0) {
+            save(updated)
+            return
+        }
+        val activeIndex = prefs.getInt("active_account", 0).coerceIn(0, (all.size - 1).coerceAtLeast(0))
+        all[index] = updated
+        writeAccounts(all)
+        prefs.edit().putInt("active_account", activeIndex).apply()
+        if (activeIndex == index) writeLegacy(updated)
     }
 
     fun load(): PlaylistAccount? {
@@ -55,16 +71,30 @@ class AccountStore(context: Context) {
 
     fun setActive(account: PlaylistAccount) {
         val all = accounts()
-        val index = all.indexOfFirst { it.type == account.type && it.server.trim() == account.server.trim() && it.username == account.username }
+        val index = all.indexOfFirst { accountKey(it) == accountKey(account) }
         if (index >= 0) prefs.edit().putInt("active_account", index).apply()
         writeLegacy(account)
     }
 
     fun remove(account: PlaylistAccount) {
-        val all = accounts().filterNot { it.type == account.type && it.server.trim() == account.server.trim() && it.username == account.username }
-        writeAccounts(all)
-        prefs.edit().putInt("active_account", 0).apply()
-        if (all.isEmpty()) clearLegacy() else writeLegacy(all.first())
+        val all = accounts()
+        val removeIndex = all.indexOfFirst { accountKey(it) == accountKey(account) }
+        if (removeIndex < 0) return
+        val activeIndex = prefs.getInt("active_account", 0).coerceIn(0, (all.size - 1).coerceAtLeast(0))
+        val remaining = all.toMutableList().also { it.removeAt(removeIndex) }
+        writeAccounts(remaining)
+        if (remaining.isEmpty()) {
+            prefs.edit().remove("active_account").apply()
+            clearLegacy()
+            return
+        }
+        val nextActive = when {
+            removeIndex < activeIndex -> activeIndex - 1
+            removeIndex == activeIndex -> removeIndex.coerceAtMost(remaining.lastIndex)
+            else -> activeIndex
+        }.coerceIn(0, remaining.lastIndex)
+        prefs.edit().putInt("active_account", nextActive).apply()
+        writeLegacy(remaining[nextActive])
     }
 
     private fun writeAccounts(all: List<PlaylistAccount>) {
@@ -135,41 +165,6 @@ class AccountStore(context: Context) {
         prefs.edit().putString("recent", list.take(50).joinToString("|")).apply()
     }
     fun recents(): List<String> = prefs.getString("recent", "").orEmpty().split('|').filter { it.isNotBlank() }
-
-    private fun accountSuffix(account: PlaylistAccount): String =
-        "${account.type}:${account.server.trim()}:${account.username}".hashCode().toString()
-
-    fun setLastLive(account: PlaylistAccount, channelId: String, group: String) {
-        if (channelId.isBlank()) return
-        val suffix = accountSuffix(account)
-        prefs.edit()
-            .putString("last_live_id_$suffix", channelId)
-            .putString("last_live_group_$suffix", group)
-            .apply()
-    }
-
-    fun lastLiveId(account: PlaylistAccount?): String? {
-        account ?: return null
-        return prefs.getString("last_live_id_${accountSuffix(account)}", null)?.takeIf { it.isNotBlank() }
-    }
-
-    fun lastLiveGroup(account: PlaylistAccount?): String? {
-        account ?: return null
-        return prefs.getString("last_live_group_${accountSuffix(account)}", null)?.takeIf { it.isNotBlank() }
-    }
-
-    fun addSearchTerm(term: String) {
-        val clean = term.trim()
-        if (clean.length < 2) return
-        val list = searchHistory().filterNot { it.equals(clean, ignoreCase = true) }.toMutableList()
-        list.add(0, clean)
-        prefs.edit().putString("search_history_v1", list.take(10).joinToString("|")).apply()
-    }
-
-    fun searchHistory(): List<String> = prefs.getString("search_history_v1", "").orEmpty()
-        .split('|').map { it.trim() }.filter { it.isNotBlank() }.take(10)
-
-    fun clearSearchHistory() { prefs.edit().remove("search_history_v1").apply() }
 
     fun playbackProfile(): StreamingProfile = runCatching {
         StreamingProfile.valueOf(prefs.getString("playback_profile", StreamingProfile.BALANCED.name).orEmpty())
