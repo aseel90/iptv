@@ -20,6 +20,16 @@
 - Verify Favorites stays synchronized after server refresh/reload and across app restarts.
 - Keep D-pad focus predictable when toggling favorites from channel lists.
 
+## Next update — Connection quality indicator
+
+- Add a small, unobtrusive connection-quality indicator in the Live player UI, similar to simple signal bars/status dots.
+- Use clear states such as Excellent / Good / Weak / Offline (or equivalent icon-only states with accessible text).
+- Base the indicator on real playback health where possible: startup time, recent buffering/rebuffering, stream throughput and player errors—not only Wi-Fi signal strength.
+- Avoid misleading users when the device is on Ethernet or when Wi-Fi strength is high but the IPTV server/stream itself is poor.
+- Keep the indicator lightweight and non-distracting, visible during controls/OSD and optionally in channel info.
+- Reset/recalculate the state when changing channels so it reflects the current stream rather than the previous one.
+- Verify the indicator behaves sensibly on slow servers, unstable internet, offline streams and healthy high-bitrate channels.
+
 ## 0.3.x — Stabilization and polish
 
 - Continue real-device testing across Android TV / Google TV / Xiaomi TV Stick layouts.
