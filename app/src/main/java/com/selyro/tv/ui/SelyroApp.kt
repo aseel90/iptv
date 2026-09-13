@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -75,6 +76,16 @@ private fun sectionLabel(section: Section): String = when (section) {
     Section.FAVORITES -> tx("Favorites", "المفضلة")
     Section.RECENT -> tx("Recent", "الأخيرة")
     Section.SETTINGS -> tx("Settings", "الإعدادات")
+}
+
+private fun sectionIcon(section: Section): Int = when (section) {
+    Section.HOME -> R.drawable.ic_nav_home
+    Section.LIVE -> R.drawable.ic_nav_live
+    Section.MOVIES -> R.drawable.ic_nav_movies
+    Section.SERIES -> R.drawable.ic_nav_series
+    Section.FAVORITES -> R.drawable.ic_nav_favorites
+    Section.RECENT -> R.drawable.ic_nav_recent
+    Section.SETTINGS -> R.drawable.ic_nav_settings
 }
 
 private data class PlayRequest(
@@ -266,7 +277,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
         val compact = maxWidth < 1100.dp; val railWidth = if (compact) 170.dp else 208.dp; val contentPadding = if (compact) 16.dp else 26.dp
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.width(railWidth).fillMaxHeight().background(Rail).padding(if (compact) 12.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 7.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(painterResource(R.drawable.selyro_tv_icon), "Selyro TV", Modifier.size(if (compact) 62.dp else 74.dp)); Text("SELYRO TV", color = Accent, fontSize = if (compact) 17.sp else 19.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(if (compact) 5.dp else 9.dp)); Section.entries.forEach { item -> TvNavItem(sectionLabel(item), section == item) { section = item } }
+                Image(painterResource(R.drawable.selyro_tv_icon), "Selyro TV", Modifier.size(if (compact) 62.dp else 74.dp)); Text("SELYRO TV", color = Accent, fontSize = if (compact) 17.sp else 19.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(if (compact) 5.dp else 9.dp)); Section.entries.forEach { item -> TvNavItem(sectionLabel(item), section == item, iconRes = sectionIcon(item)) { section = item } }
             }
             Column(Modifier.weight(1f).fillMaxHeight().padding(contentPadding)) {
                 if (!error.isNullOrBlank()) { Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF3A2022)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Text(error.orEmpty(), color = Color.White, modifier = Modifier.weight(1f), maxLines = 2); Spacer(Modifier.width(8.dp)); TvButton(tx("Dismiss", "إغلاق")) { vm.clearError() } }; Spacer(Modifier.height(10.dp)) }
@@ -719,21 +730,30 @@ private fun DashboardCard(title: String, value: String, modifier: Modifier = Mod
 }
 
 @Composable
-private fun TvNavItem(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun TvNavItem(label: String, selected: Boolean, iconRes: Int? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (focused) 1.025f else 1f, label = "nav-focus")
+    val foreground = if (focused || selected) Color.White else Muted
+    val iconColor = if (focused || selected) Accent else Color(0xFF718292)
     Row(
         Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(12.dp))
             .background(if (focused) Focus else if (selected) Color(0xFF14242F) else Color.Transparent)
             .border(1.dp, if (focused) Accent.copy(alpha = .55f) else Color.Transparent, RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }.clickable(onClick = onClick).focusable()
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = if (iconRes != null) 9.dp else 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(if (selected || focused) Accent else Color.Transparent))
-        Spacer(Modifier.width(9.dp))
-        Text(label, color = if (focused || selected) Color.White else Muted, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 2)
+        if (iconRes != null) {
+            Box(Modifier.width(3.dp).height(26.dp).clip(RoundedCornerShape(2.dp)).background(if (selected || focused) Accent else Color.Transparent))
+            Spacer(Modifier.width(9.dp))
+            Image(painter = painterResource(iconRes), contentDescription = null, modifier = Modifier.size(24.dp), colorFilter = ColorFilter.tint(iconColor))
+            Spacer(Modifier.width(11.dp))
+        } else {
+            Box(Modifier.size(6.dp).clip(RoundedCornerShape(3.dp)).background(if (selected || focused) Accent else Color.Transparent))
+            Spacer(Modifier.width(9.dp))
+        }
+        Text(label, color = foreground, fontSize = 14.sp, fontWeight = if (selected || focused) FontWeight.SemiBold else FontWeight.Normal, maxLines = 2)
     }
 }
 
