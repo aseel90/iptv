@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -58,8 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
-import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
@@ -106,8 +105,6 @@ fun PlayerScreen(
     onLiveTune: (Channel) -> Unit = {},
     onToggleLiveFavorite: () -> Unit = {},
     onProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
-    nextLabel: String? = null,
-    onPlayNext: (() -> Unit)? = null,
     onBack: () -> Unit
 ) {
     val isLive = liveContext != null
@@ -120,8 +117,6 @@ fun PlayerScreen(
     var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
     var bufferPercent by remember { mutableIntStateOf(player.bufferedPercentage.coerceIn(0, 100)) }
     var seekHint by remember { mutableStateOf<String?>(null) }
-    var streamError by remember { mutableStateOf<String?>(null) }
-    var ended by remember { mutableStateOf(player.playbackState == Player.STATE_ENDED) }
     var tracksVersion by remember { mutableIntStateOf(0) }
     var trackPanelVisible by remember { mutableStateOf(false) }
     var trackTab by remember { mutableStateOf(TrackTab.AUDIO) }
@@ -136,6 +131,13 @@ fun PlayerScreen(
     var pendingZapIndex by remember { mutableIntStateOf(-1) }
     var zapPreview by remember { mutableStateOf<Channel?>(null) }
 
+    var liveStartupStartedAt by remember(liveContext?.currentChannelId) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    var liveStartupMs by remember(liveContext?.currentChannelId) { mutableLongStateOf(0L) }
+    var liveBufferEvents by remember(liveContext?.currentChannelId) { mutableIntStateOf(0) }
+    var livePlaybackError by remember(liveContext?.currentChannelId) { mutableStateOf(false) }
+    var lastLivePlaybackState by remember(liveContext?.currentChannelId) { mutableIntStateOf(player.playbackState) }
+    var qualityPulse by remember(liveContext?.currentChannelId) { mutableStateOf(isLive) }
+
     val focusRequester = remember { FocusRequester() }
     val audioOptions = remember(tracksVersion, language) { trackOptions(player, C.TRACK_TYPE_AUDIO, language) }
     val subtitleOptions = remember(tracksVersion, language) { trackOptions(player, C.TRACK_TYPE_TEXT, language) }
@@ -144,6 +146,14 @@ fun PlayerScreen(
         liveChannels.indexOfFirst { it.id == liveContext?.currentChannelId }.coerceAtLeast(0)
     }
     val currentLiveChannel = liveChannels.getOrNull(currentLiveIndex)
+    val streamGrade = when {
+        !isLive -> ConnectionGrade.CHECKING
+        livePlaybackError -> ConnectionGrade.OFFLINE
+        liveStartupMs == 0L -> ConnectionGrade.CHECKING
+        liveBufferEvents >= 3 || liveStartupMs > 7_000L -> ConnectionGrade.WEAK
+        liveBufferEvents >= 1 || liveStartupMs > 3_000L -> ConnectionGrade.GOOD
+        else -> ConnectionGrade.EXCELLENT
+    }
 
     fun currentOptions(): List<TrackOption> = if (trackTab == TrackTab.AUDIO) audioOptions else subtitleOptions
     fun revealControls() { controlsVisible = true; interactionVersion++ }
@@ -215,22 +225,46 @@ fun PlayerScreen(
         interactionVersion++
     }
 
-    DisposableEffect(player, language) {
+    LaunchedEffect(liveContext?.currentChannelId) {
+        if (isLive) {
+            liveStartupStartedAt = SystemClock.elapsedRealtime()
+            qualityPulse = true
+        }
+    }
+
+    LaunchedEffect(qualityPulse, liveContext?.currentChannelId) {
+        if (isLive && qualityPulse) {
+            delay(5_000L)
+            qualityPulse = false
+        }
+    }
+
+    DisposableEffect(player, liveContext?.currentChannelId) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
                 playing = player.isPlaying
-                ended = playbackState == Player.STATE_ENDED
                 bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
-                if (playbackState == Player.STATE_READY) streamError = null
-                if (playbackState == Player.STATE_ENDED) {
-                    persistProgress(force = true)
-                    controlsVisible = true
+                if (isLive) {
+                    if (playbackState == Player.STATE_BUFFERING && lastLivePlaybackState != Player.STATE_BUFFERING) {
+                        liveBufferEvents += 1
+                        qualityPulse = true
+                    }
+                    if (playbackState == Player.STATE_READY) {
+                        if (liveStartupMs == 0L) {
+                            liveStartupMs = (SystemClock.elapsedRealtime() - liveStartupStartedAt).coerceAtLeast(1L)
+                        }
+                        livePlaybackError = false
+                    }
+                    lastLivePlaybackState = playbackState
                 }
+                if (playbackState == Player.STATE_ENDED) persistProgress(force = true)
             }
             override fun onPlayerError(error: PlaybackException) {
-                streamError = pt(language, "Stream unavailable • retrying…", "البث غير متاح • جاري إعادة المحاولة…")
-                controlsVisible = true
+                if (isLive) {
+                    livePlaybackError = true
+                    qualityPulse = true
+                }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying; if (!isLive) revealControls() }
             override fun onTracksChanged(tracks: Tracks) { tracksVersion++ }
@@ -290,27 +324,12 @@ fun PlayerScreen(
 
     LaunchedEffect(seekHint) { if (seekHint != null) { delay(1_100); seekHint = null } }
 
-    LaunchedEffect(buffering, player.currentMediaItem?.mediaId) {
-        if (buffering) {
-            delay(12_000)
-            if (buffering && player.playbackState != Player.STATE_READY) {
-                streamError = pt(language, "Slow or offline stream • retrying…", "البث بطيء أو متوقف • جاري إعادة المحاولة…")
-            }
-        }
-    }
-
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusRequester(focusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
-                if (!isLive && ended && nextLabel != null && onPlayNext != null &&
-                    (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.MediaPlayPause)) {
-                    onPlayNext.invoke()
-                    ended = false
-                    streamError = null
-                    true
-                } else if (trackPanelVisible) {
+                if (trackPanelVisible) {
                     when (event.key) {
                         Key.DirectionLeft -> { trackTab = TrackTab.AUDIO; trackCursor = optionsIndexForSelected(audioOptions); true }
                         Key.DirectionRight -> { trackTab = TrackTab.SUBTITLES; trackCursor = optionsIndexForSelected(subtitleOptions); true }
@@ -440,31 +459,11 @@ fun PlayerScreen(
             }
         }
 
-        if (streamError != null && !buffering) {
-            Box(
-                Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp))
-                    .background(Color.Black.copy(alpha = 0.82f))
-                    .border(1.dp, Color(0xFFFFB86B).copy(alpha = .75f), RoundedCornerShape(16.dp))
-                    .padding(horizontal = 24.dp, vertical = 16.dp)
-            ) {
-                Text(streamError.orEmpty(), color = Color.White, fontSize = 14.sp)
-            }
-        }
-
-        if (!isLive && ended && nextLabel != null && onPlayNext != null) {
-            Column(
-                Modifier.align(Alignment.Center).widthIn(min = 360.dp, max = 560.dp)
-                    .clip(RoundedCornerShape(20.dp)).background(PlayerPanelStrong)
-                    .border(1.dp, PlayerAccent.copy(alpha = .65f), RoundedCornerShape(20.dp))
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(pt(language, "UP NEXT", "التالي"), color = PlayerAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-                Text(nextLabel, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2)
-                Spacer(Modifier.height(12.dp))
-                Text(pt(language, "Press OK to play next episode", "اضغط OK لتشغيل الحلقة التالية"), color = PlayerMuted, fontSize = 13.sp)
-            }
+        if (isLive && (controlsVisible || qualityPulse || buffering || streamGrade == ConnectionGrade.WEAK || streamGrade == ConnectionGrade.OFFLINE)) {
+            StreamQualityBadge(
+                Modifier.align(Alignment.TopEnd).padding(44.dp),
+                language, streamGrade, liveStartupMs, liveBufferEvents
+            )
         }
 
         if (buffering) {
@@ -485,7 +484,10 @@ fun PlayerScreen(
         }
 
         if (isLive && liveInfoVisible) {
-            LiveInfoPanel(Modifier.align(Alignment.CenterEnd), language, currentLiveChannel, liveContext?.epg.orEmpty())
+            LiveInfoPanel(
+                Modifier.align(Alignment.CenterEnd), language, currentLiveChannel, liveContext?.epg.orEmpty(),
+                streamGrade, liveStartupMs, liveBufferEvents
+            )
         }
 
         if (isLive && zapPreview != null && !channelDrawerVisible && !liveInfoVisible && !liveHubVisible) {
@@ -591,7 +593,59 @@ private fun LiveChannelDrawer(
 }
 
 @Composable
-private fun LiveInfoPanel(modifier: Modifier, language: AppLanguage, channel: Channel?, epg: List<EpgProgram>) {
+private fun StreamQualityBadge(
+    modifier: Modifier,
+    language: AppLanguage,
+    grade: ConnectionGrade,
+    startupMs: Long,
+    bufferEvents: Int,
+    detailed: Boolean = false
+) {
+    val color = when (grade) {
+        ConnectionGrade.EXCELLENT -> Color(0xFF62E6A7)
+        ConnectionGrade.GOOD -> Color(0xFFFFD166)
+        ConnectionGrade.WEAK -> Color(0xFFFF9F43)
+        ConnectionGrade.OFFLINE -> Color(0xFFFF6B6B)
+        ConnectionGrade.CHECKING -> PlayerMuted
+    }
+    val label = when (grade) {
+        ConnectionGrade.EXCELLENT -> pt(language, "Excellent", "ممتاز")
+        ConnectionGrade.GOOD -> pt(language, "Good", "جيد")
+        ConnectionGrade.WEAK -> pt(language, "Weak", "ضعيف")
+        ConnectionGrade.OFFLINE -> pt(language, "Offline", "غير متصل")
+        ConnectionGrade.CHECKING -> pt(language, "Checking", "جاري الفحص")
+    }
+    Row(
+        modifier.clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = .72f))
+            .border(1.dp, color.copy(alpha = .55f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("▂▄▆█", color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(label, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            if (detailed) {
+                val startup = if (startupMs > 0L) "${startupMs}ms" else "—"
+                Text(
+                    pt(language, "Start $startup • buffers $bufferEvents", "بدء $startup • تقطيع $bufferEvents"),
+                    color = PlayerMuted, fontSize = 10.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveInfoPanel(
+    modifier: Modifier,
+    language: AppLanguage,
+    channel: Channel?,
+    epg: List<EpgProgram>,
+    grade: ConnectionGrade,
+    startupMs: Long,
+    bufferEvents: Int
+) {
     Column(
         modifier.width(430.dp).fillMaxHeight().background(PlayerPanelStrong).padding(horizontal = 22.dp, vertical = 32.dp)
     ) {
@@ -599,34 +653,18 @@ private fun LiveInfoPanel(modifier: Modifier, language: AppLanguage, channel: Ch
         Spacer(Modifier.height(10.dp))
         Text(channel?.name ?: pt(language, "Live channel", "قناة مباشرة"), color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, maxLines = 2)
         if (!channel?.group.isNullOrBlank()) Text(channel?.group.orEmpty(), color = PlayerMuted, fontSize = 13.sp)
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(14.dp))
+        StreamQualityBadge(Modifier, language, grade, startupMs, bufferEvents, detailed = true)
+        Spacer(Modifier.height(20.dp))
         Text("EPG", color = PlayerAccent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         if (epg.isEmpty()) {
             Text(pt(language, "No guide data available", "لا توجد بيانات للجدول"), color = PlayerMuted, fontSize = 13.sp)
         } else {
-            val now = System.currentTimeMillis()
-            val ordered = epg.sortedBy { it.start }
-            val current = ordered.firstOrNull { it.start <= now && now < it.end }
-            if (current != null) {
-                Text(pt(language, "NOW", "الآن") + "  ${epgTime(current.start)}–${epgTime(current.end)}", color = PlayerAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(5.dp))
-                Text(current.title.ifBlank { pt(language, "Program", "برنامج") }, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                val progress = if (current.end > current.start) ((now - current.start).toFloat() / (current.end - current.start)).coerceIn(0f, 1f) else 0f
-                Spacer(Modifier.height(8.dp))
-                Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = .14f))) {
-                    Box(Modifier.fillMaxHeight().fillMaxWidth(progress).background(PlayerAccent))
-                }
-                if (!current.description.isNullOrBlank()) {
-                    Spacer(Modifier.height(7.dp))
-                    Text(current.description.orEmpty(), color = PlayerMuted, fontSize = 11.sp, maxLines = 3)
-                }
-                Spacer(Modifier.height(15.dp))
-            }
-            Text(pt(language, "NEXT", "التالي"), color = PlayerAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            ordered.filter { it !== current && it.end > now }.take(4).forEach { program ->
-                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                    Text("${epgTime(program.start)}  ${program.title.ifBlank { pt(language, "Program", "برنامج") }}", color = Color.White, fontSize = 13.sp, maxLines = 1)
+            epg.sortedBy { it.start }.take(5).forEach { program ->
+                Column(Modifier.fillMaxWidth().padding(vertical = 7.dp)) {
+                    Text(program.title.ifBlank { pt(language, "Program", "برنامج") }, color = Color.White, fontSize = 14.sp, maxLines = 1)
+                    if (!program.description.isNullOrBlank()) Text(program.description.orEmpty(), color = PlayerMuted, fontSize = 11.sp, maxLines = 2)
                 }
             }
         }
@@ -651,11 +689,6 @@ private fun LiveZapToast(modifier: Modifier, language: AppLanguage, channel: Cha
             Text(pt(language, "Switching channel…", "جاري تبديل القناة…"), color = PlayerMuted, fontSize = 11.sp)
         }
     }
-}
-
-private fun epgTime(epochMs: Long): String {
-    if (epochMs <= 0L) return "--:--"
-    return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(epochMs))
 }
 
 private fun channelMonogram(name: String): String {

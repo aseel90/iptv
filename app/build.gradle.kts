@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 16
-        versionName = "0.3.6-performance-ux"
+        versionCode = 17
+        versionName = "0.3.7-management-favorites-quality"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
