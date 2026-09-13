@@ -17,6 +17,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
     private val maxRetries = 5
     private var playbackGeneration = 0L
     private var startupWatchdog: Runnable? = null
+    private var rebufferWatchdog: Runnable? = null
     private var retryRunnable: Runnable? = null
 
     private val reconnectListener = object : Player.Listener {
@@ -25,12 +26,26 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_READY) {
-                retryCount = 0
-                cancelStartupWatchdog()
-                cancelRetry()
-            } else if (playbackState == Player.STATE_IDLE && playerInternal.currentMediaItem != null) {
-                scheduleReconnect(playerInternal.currentMediaItem?.mediaId.orEmpty(), playbackGeneration)
+            when (playbackState) {
+                Player.STATE_READY -> {
+                    retryCount = 0
+                    cancelStartupWatchdog()
+                    cancelRebufferWatchdog()
+                    cancelRetry()
+                }
+                Player.STATE_BUFFERING -> {
+                    scheduleRebufferWatchdog(
+                        playerInternal.currentMediaItem?.mediaId.orEmpty(),
+                        playbackGeneration
+                    )
+                }
+                Player.STATE_IDLE -> {
+                    cancelRebufferWatchdog()
+                    if (playerInternal.currentMediaItem != null) {
+                        scheduleReconnect(playerInternal.currentMediaItem?.mediaId.orEmpty(), playbackGeneration)
+                    }
+                }
+                Player.STATE_ENDED -> cancelRebufferWatchdog()
             }
         }
     }
@@ -48,6 +63,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         retryCount = 0
         mainHandler.removeCallbacksAndMessages(null)
         startupWatchdog = null
+        rebufferWatchdog = null
         retryRunnable = null
 
         val item = MediaItem.Builder()
@@ -73,6 +89,8 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         if (profile == currentProfile) return
         playbackGeneration += 1
         cancelStartupWatchdog()
+        cancelRebufferWatchdog()
+        cancelRetry()
         val wasPlaying = playerInternal.playWhenReady
         val item = playerInternal.currentMediaItem
         val position = playerInternal.currentPosition
@@ -105,6 +123,27 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         startupWatchdog = null
     }
 
+    private fun scheduleRebufferWatchdog(mediaId: String, generation: Long) {
+        if (mediaId.isBlank() || generation != playbackGeneration) return
+        if (startupWatchdog != null || retryRunnable != null || rebufferWatchdog != null) return
+        val timeoutMs = maxOf(8_000L, currentProfile.rebufferMs.toLong() * 3L)
+        val runnable = Runnable {
+            rebufferWatchdog = null
+            if (generation != playbackGeneration) return@Runnable
+            if (playerInternal.currentMediaItem?.mediaId != mediaId) return@Runnable
+            if (playerInternal.playbackState == Player.STATE_BUFFERING && playerInternal.playWhenReady) {
+                scheduleReconnect(mediaId, generation)
+            }
+        }
+        rebufferWatchdog = runnable
+        mainHandler.postDelayed(runnable, timeoutMs)
+    }
+
+    private fun cancelRebufferWatchdog() {
+        rebufferWatchdog?.let(mainHandler::removeCallbacks)
+        rebufferWatchdog = null
+    }
+
     private fun cancelRetry() {
         retryRunnable?.let(mainHandler::removeCallbacks)
         retryRunnable = null
@@ -115,6 +154,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         if (retryRunnable != null) return
         if (retryCount >= maxRetries || playerInternal.currentMediaItem?.mediaId != mediaId) return
         cancelStartupWatchdog()
+        cancelRebufferWatchdog()
         retryCount += 1
         val delayMs = when (retryCount) {
             1 -> 700L
@@ -144,6 +184,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         playbackGeneration += 1
         mainHandler.removeCallbacksAndMessages(null)
         startupWatchdog = null
+        rebufferWatchdog = null
         retryRunnable = null
         retryCount = 0
         playerInternal.playWhenReady = false
@@ -155,6 +196,7 @@ class PlaybackManager(context: Context, initialProfile: StreamingProfile = Strea
         playbackGeneration += 1
         mainHandler.removeCallbacksAndMessages(null)
         startupWatchdog = null
+        rebufferWatchdog = null
         retryRunnable = null
         playerInternal.removeListener(reconnectListener)
         playerInternal.release()
