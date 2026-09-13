@@ -20,74 +20,6 @@ jobs:
         with:
           ref: release/0.3.9-stability-speed
           fetch-depth: 0
-
-      - name: Apply scoped 0.3.9 source changes
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-
-          p = Path('app/src/main/java/com/selyro/tv/ui/AppViewModel.kt')
-          s = p.read_text()
-          s = s.replace('''    init {\n        if (_account.value != null) loadLive()\n        probeServers()\n    }''', '''    init {\n        if (_account.value != null) loadLive()\n    }''')
-          s = s.replace('''                _account.value = account\n                probeServers()\n                channels.value = loadedChannels''', '''                _account.value = account\n                channels.value = loadedChannels''')
-          s = s.replace('''                serverQualities.value = serverQualities.value - accountKey(original)\n                probeServers()''', '''                serverQualities.value = serverQualities.value - accountKey(original)''')
-          s = s.replace('''        }\n        probeServers()\n    }\n\n    fun loadLive''', '''        }\n    }\n\n    fun loadLive''')
-          p.write_text(s)
-
-          p = Path('app/src/main/java/com/selyro/tv/ui/SelyroApp.kt')
-          s = p.read_text()
-          s = s.replace('''                            player = activePlayback.player,\n                            language = language,''', '''                            player = activePlayback.player,\n                            language = language,\n                            streamingProfile = profile,''')
-          s = s.replace('''\n    LaunchedEffect(accounts) { vm.probeServers() }\n''', '\n')
-          old = '''private fun ServerQualityBadge(quality: ServerConnectionQuality?) {\n    val grade = quality?.grade ?: ConnectionGrade.CHECKING\n    val color = when (grade) {'''
-          new = '''private fun ServerQualityBadge(quality: ServerConnectionQuality?) {\n    if (quality == null) {\n        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {\n            Text("▂▄▆█", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)\n            Text(tx("Not tested", "لم يتم الفحص"), color = Muted, fontSize = 10.sp)\n        }\n        return\n    }\n    val grade = quality.grade\n    val color = when (grade) {'''
-          if old not in s:
-              raise SystemExit('ServerQualityBadge source contract not found')
-          s = s.replace(old, new)
-          p.write_text(s)
-
-          p = Path('app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt')
-          s = p.read_text()
-          s = s.replace('import androidx.compose.animation.fadeOut\n', 'import androidx.compose.animation.fadeOut\nimport androidx.compose.animation.core.LinearEasing\nimport androidx.compose.animation.core.animateFloat\nimport androidx.compose.animation.core.infiniteRepeatable\nimport androidx.compose.animation.core.rememberInfiniteTransition\nimport androidx.compose.animation.core.tween\nimport androidx.compose.foundation.Canvas\n')
-          s = s.replace('import androidx.compose.ui.graphics.Color\n', 'import androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.graphics.drawscope.Stroke\n')
-          s = s.replace('import com.selyro.tv.model.EpgProgram\n', 'import com.selyro.tv.model.EpgProgram\nimport com.selyro.tv.player.StreamingProfile\n')
-          s = s.replace('''fun PlayerScreen(\n    player: Player,\n    language: AppLanguage,''', '''fun PlayerScreen(\n    player: Player,\n    language: AppLanguage,\n    streamingProfile: StreamingProfile,''')
-          s = s.replace('''    var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }\n    var bufferPercent by remember { mutableIntStateOf(player.bufferedPercentage.coerceIn(0, 100)) }''', '''    var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }\n    var bufferPercent by remember { mutableStateOf(bufferProgressPercent(player, streamingProfile)) }''')
-          s = s.replace('bufferPercent = player.bufferedPercentage.coerceIn(0, 100)', 'bufferPercent = bufferProgressPercent(player, streamingProfile)')
-          old = '''        if (buffering) {\n            Column(\n                Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.78f)).padding(horizontal = 24.dp, vertical = 16.dp),\n                horizontalAlignment = Alignment.CenterHorizontally\n            ) {\n                Text("${pt(language, "Connecting", "جاري الاتصال")} $bufferPercent%", color = Color.White, fontSize = 14.sp)\n                Spacer(Modifier.height(9.dp))\n                Box(Modifier.width(180.dp).height(5.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.15f))) {\n                    Box(Modifier.fillMaxHeight().fillMaxWidth((bufferPercent / 100f).coerceIn(0.04f, 1f)).background(PlayerAccent))\n                }\n            }\n        }'''
-          new = '''        if (buffering) {\n            BufferingIndicator(\n                modifier = Modifier.align(Alignment.Center),\n                percent = bufferPercent\n            )\n        }'''
-          if old not in s:
-              raise SystemExit('Buffering UI source contract not found')
-          s = s.replace(old, new)
-          needle = '''    val label = when (grade) {\n        ConnectionGrade.EXCELLENT -> pt(language, "Excellent", "ممتاز")\n        ConnectionGrade.GOOD -> pt(language, "Good", "جيد")\n        ConnectionGrade.WEAK -> pt(language, "Weak", "ضعيف")\n        ConnectionGrade.OFFLINE -> pt(language, "Offline", "غير متصل")\n        ConnectionGrade.CHECKING -> pt(language, "Checking", "جاري الفحص")\n    }\n    Row('''
-          repl = '''    val label = when (grade) {\n        ConnectionGrade.EXCELLENT -> pt(language, "Excellent", "ممتاز")\n        ConnectionGrade.GOOD -> pt(language, "Good", "جيد")\n        ConnectionGrade.WEAK -> pt(language, "Weak", "ضعيف")\n        ConnectionGrade.OFFLINE -> pt(language, "Offline", "غير متصل")\n        ConnectionGrade.CHECKING -> pt(language, "Checking", "جاري الفحص")\n    }\n    if (!detailed) {\n        Text(\n            "▂▄▆█",\n            modifier = modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = .56f)).padding(horizontal = 7.dp, vertical = 4.dp),\n            color = color,\n            fontSize = 10.sp,\n            fontWeight = FontWeight.Bold\n        )\n        return\n    }\n    Row('''
-          if needle not in s:
-              raise SystemExit('StreamQualityBadge source contract not found')
-          s = s.replace(needle, repl)
-          marker = '''@Composable\nprivate fun LiveInfoPanel('''
-          insert = '''@Composable\nprivate fun BufferingIndicator(modifier: Modifier, percent: Int?) {\n    val transition = rememberInfiniteTransition(label = "buffering")\n    val rotation by transition.animateFloat(\n        initialValue = 0f,\n        targetValue = 360f,\n        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 850, easing = LinearEasing)),\n        label = "bufferingRotation"\n    )\n    Box(\n        modifier.size(58.dp).clip(CircleShape).background(Color.Black.copy(alpha = .68f)),\n        contentAlignment = Alignment.Center\n    ) {\n        Canvas(Modifier.size(42.dp)) {\n            drawArc(\n                color = PlayerAccent,\n                startAngle = rotation,\n                sweepAngle = 250f,\n                useCenter = false,\n                style = Stroke(width = 3.dp.toPx())\n            )\n        }\n        if (percent != null) {\n            Text("$percent%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)\n        }\n    }\n}\n\nprivate fun bufferProgressPercent(player: Player, profile: StreamingProfile): Int? {\n    if (player.playbackState != Player.STATE_BUFFERING) return null\n    val bufferedMs = player.totalBufferedDuration\n    if (bufferedMs <= 0L) return null\n    val targetMs = if (player.currentPosition <= 0L) profile.playbackBufferMs else profile.rebufferMs\n    if (targetMs <= 0) return null\n    return ((bufferedMs * 100L) / targetMs.toLong()).toInt().coerceIn(0, 100)\n}\n\n@Composable\nprivate fun LiveInfoPanel('''
-          if marker not in s:
-              raise SystemExit('LiveInfoPanel source contract not found')
-          s = s.replace(marker, insert)
-          p.write_text(s)
-
-          p = Path('app/build.gradle.kts')
-          s = p.read_text().replace('versionCode = 18', 'versionCode = 19').replace('versionName = "0.3.8-navigation-icons"', 'versionName = "0.3.9-stability-speed"')
-          p.write_text(s)
-
-          Path('RELEASE_NOTES_0.3.9.md').write_text('''# Selyro TV 0.3.9-stability-speed\n\n- Removes automatic server connection probes during app startup, account changes, and Settings entry. Connection testing now runs only when **TEST CONNECTION** is pressed.\n- Shows **Not tested / لم يتم الفحص** for servers that have not been manually tested.\n- Simplifies the live quality indicator to compact signal bars during normal viewing, while keeping full quality details in Info.\n- Replaces the old `Connecting xx%` bar with a small animated buffering ring. A percentage is shown only when it can be derived from Media3 `totalBufferedDuration` against the active profile buffer target.\n- Keeps live channel zap, Audio, Subtitles, Favorites, Info, and 0.3.8 navigation icons unchanged.\n- Does not change bitrate policy, decoder selection, stream URL logic, `PlaybackManager`, `PlayerFactory`, `StreamingProfile`, or LoadControl values.\n''')
-          PY
-
-      - name: Commit scoped source update
-        run: |
-          set -euxo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/build.gradle.kts app/src/main/java/com/selyro/tv/ui/AppViewModel.kt app/src/main/java/com/selyro/tv/ui/SelyroApp.kt app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt RELEASE_NOTES_0.3.9.md
-          git commit -m 'Prepare Selyro TV v0.3.9 stability speed' || true
-          git push origin HEAD:release/0.3.9-stability-speed
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -100,27 +32,29 @@ jobs:
           curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp
           echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
-
       - name: Verify 0.3.9 stability and speed contract
         run: |
           set -euxo pipefail
           grep -q 'versionCode = 19' app/build.gradle.kts
           grep -q 'versionName = "0.3.9-stability-speed"' app/build.gradle.kts
-          test "$(grep -c 'probeServers()' app/src/main/java/com/selyro/tv/ui/AppViewModel.kt)" -eq 1
-          test "$(grep -c 'vm.probeServers()' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt)" -eq 1
-          grep -q 'TEST CONNECTION' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
-          grep -q 'Not tested' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
-          grep -q 'لم يتم الفحص' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
-          ! grep -q 'bufferedPercentage' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
-          grep -q 'totalBufferedDuration' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
-          grep -q 'BufferingIndicator' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
           grep -q 'FAST(5_000, 15_000, 650, 1_200)' app/src/main/java/com/selyro/tv/player/StreamingProfile.kt
           grep -q 'BALANCED(10_000, 30_000, 1_000, 2_000)' app/src/main/java/com/selyro/tv/player/StreamingProfile.kt
           grep -q 'STABLE(20_000, 50_000, 2_000, 4_000)' app/src/main/java/com/selyro/tv/player/StreamingProfile.kt
-          git diff --exit-code origin/release/0.3.8-navigation-icons -- app/src/main/java/com/selyro/tv/player/PlaybackManager.kt app/src/main/java/com/selyro/tv/player/PlayerFactory.kt app/src/main/java/com/selyro/tv/player/StreamingProfile.kt
+          test "$(grep -c 'probeServers()' app/src/main/java/com/selyro/tv/ui/AppViewModel.kt)" -eq 1
+          test "$(grep -c 'vm.probeServers()' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt)" -eq 1
+          ! grep -q 'LaunchedEffect(accounts).*probeServers' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'Not tested' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          ! grep -q 'bufferedPercentage' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          grep -q 'totalBufferedDuration' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          grep -q 'scheduleRebufferWatchdog' app/src/main/java/com/selyro/tv/player/PlaybackManager.kt
+          git diff --exit-code origin/release/0.3.8-navigation-icons -- app/src/main/java/com/selyro/tv/player/PlayerFactory.kt app/src/main/java/com/selyro/tv/player/StreamingProfile.kt
           git diff --exit-code origin/release/0.3.8-navigation-icons -- app/src/main/res/drawable/ic_nav_home.xml app/src/main/res/drawable/ic_nav_live.xml app/src/main/res/drawable/ic_nav_movies.xml app/src/main/res/drawable/ic_nav_series.xml app/src/main/res/drawable/ic_nav_favorites.xml app/src/main/res/drawable/ic_nav_recent.xml app/src/main/res/drawable/ic_nav_settings.xml
-
-      - name: Verify lifecycle Live UX and TV identity remain preserved
+          grep -q 'StreamQualityBadge' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          grep -q 'fun replace' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'sectionIcon' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'ColorFilter.tint' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          for icon in home live movies series favorites recent settings; do test -s "app/src/main/res/drawable/ic_nav_${icon}.xml"; done
+      - name: Verify lifecycle, Live UX and TV identity remain preserved
         run: |
           set -euxo pipefail
           grep -q 'android.permission.HIDE_OVERLAY_WINDOWS' app/src/main/AndroidManifest.xml
@@ -130,18 +64,12 @@ jobs:
           grep -q 'fun queueZap' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
           grep -q 'LiveControlHub' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
           grep -q 'LiveChannelDrawer' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
-          grep -q 'openTrackPanel(TrackTab.AUDIO)' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
-          grep -q 'openTrackPanel(TrackTab.SUBTITLES)' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
-          grep -q 'onToggleLiveFavorite' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
-          grep -q 'liveInfoVisible' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
           test -s app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png
           file app/src/main/res/drawable-xhdpi/selyro_tv_banner_asset.png | grep -q '320 x 180'
           test -s app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png
           file app/src/main/res/mipmap-xhdpi/ic_launcher_tv.png | grep -q '160 x 160'
-
-      - name: Unit tests lint and assembleDebug
+      - name: Test lint and build
         run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
-
       - name: Re-sign with stable Selyro QA key
         run: |
           set -euxo pipefail
@@ -151,7 +79,6 @@ jobs:
           $ANDROID_HOME/build-tools/36.0.0/apksigner sign --key /tmp/selyro-testkey.pk8 --cert /tmp/selyro-testkey.x509.pem --out /tmp/Selyro-TV-signed.apk "$APK"
           mv /tmp/Selyro-TV-signed.apk "$APK"
           $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK"
-
       - name: Verify APK identity and version
         run: |
           set -euxo pipefail
@@ -160,8 +87,7 @@ jobs:
           grep -q "package: name='com.selyro.tv' versionCode='19'" /tmp/apk-badging.txt
           grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
           grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
-
-      - name: Export updater APK SHA256 and relay chunks
+      - name: Export updater APK and relay chunks
         run: |
           set -euxo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
@@ -175,12 +101,13 @@ jobs:
           VERSION_CODE=19
           VERSION_NAME=0.3.9-stability-speed
           SHA256=$SHA
-          NOTES=Stability & Speed: automatic server probes removed, manual connection testing only, lighter live quality indicator, and a lightweight buffering spinner using Media3 buffered duration. Playback engine, bitrate, decoder, stream URL logic, buffer profiles, and navigation icons remain unchanged.
+          NOTES=Stability and speed update: automatic server probes removed, lightweight live quality indicator, lighter buffering UI based on Media3 buffered duration, and recovery from prolonged live buffering stalls. Playback profiles, decoder path, stream URL logic, and navigation icons are preserved.
           EOF
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add ci-artifacts/Selyro-TV-v0.3.9-stability-speed.apk ci-artifacts/Selyro-TV-v0.3.9-stability-speed.sha256 relay/selyro
-          git commit -m 'Export stable-signed Selyro TV v0.3.9 stability speed' || true
+          git commit -m 'Export stable-signed Selyro TV v0.3.9 stability speed' || exit 0
           git push origin HEAD:release/0.3.9-stability-speed
-
       - uses: actions/upload-artifact@v4
         with:
           name: Selyro-TV-v0.3.9-stability-speed
