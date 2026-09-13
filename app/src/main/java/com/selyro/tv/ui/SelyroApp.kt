@@ -193,6 +193,7 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                         PlayerScreen(
                             player = activePlayback.player,
                             language = language,
+                            streamingProfile = profile,
                             liveContext = if (currentRequest.kind == "live") {
                                 LivePlayerContext(
                                     currentChannelId = currentRequest.id,
@@ -473,7 +474,6 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
     var editing by remember { mutableStateOf<PlaylistAccount?>(null) }
     var confirmClearAll by remember { mutableStateOf(false) }
 
-    LaunchedEffect(accounts) { vm.probeServers() }
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Heading(tx("Settings", "الإعدادات"), tx("Playback, servers, language, display and updates", "التشغيل والسيرفرات واللغة والعرض والتحديثات")) }
@@ -556,7 +556,14 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
 
 @Composable
 private fun ServerQualityBadge(quality: ServerConnectionQuality?) {
-    val grade = quality?.grade ?: ConnectionGrade.CHECKING
+    if (quality == null) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("▂▄▆█", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text(tx("Not tested", "لم يتم الفحص"), color = Muted, fontSize = 10.sp)
+        }
+        return
+    }
+    val grade = quality.grade
     val color = when (grade) {
         ConnectionGrade.EXCELLENT -> Color(0xFF62E6A7)
         ConnectionGrade.GOOD -> Color(0xFFFFD166)

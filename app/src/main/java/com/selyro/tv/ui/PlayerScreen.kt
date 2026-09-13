@@ -7,6 +7,12 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -45,6 +51,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -67,6 +74,7 @@ import androidx.tv.material3.Text
 import com.selyro.tv.data.AppLanguage
 import com.selyro.tv.model.Channel
 import com.selyro.tv.model.EpgProgram
+import com.selyro.tv.player.StreamingProfile
 import kotlinx.coroutines.delay
 import kotlin.math.max
 
@@ -101,6 +109,7 @@ private fun pt(language: AppLanguage, en: String, ar: String): String =
 fun PlayerScreen(
     player: Player,
     language: AppLanguage,
+    streamingProfile: StreamingProfile,
     liveContext: LivePlayerContext? = null,
     onLiveTune: (Channel) -> Unit = {},
     onToggleLiveFavorite: () -> Unit = {},
@@ -115,7 +124,7 @@ fun PlayerScreen(
     var buffered by remember { mutableLongStateOf(max(0L, player.bufferedPosition)) }
     var playing by remember { mutableStateOf(player.isPlaying) }
     var buffering by remember { mutableStateOf(player.playbackState == Player.STATE_BUFFERING) }
-    var bufferPercent by remember { mutableIntStateOf(player.bufferedPercentage.coerceIn(0, 100)) }
+    var bufferPercent by remember { mutableStateOf(bufferProgressPercent(player, streamingProfile)) }
     var seekHint by remember { mutableStateOf<String?>(null) }
     var tracksVersion by remember { mutableIntStateOf(0) }
     var trackPanelVisible by remember { mutableStateOf(false) }
@@ -244,7 +253,7 @@ fun PlayerScreen(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
                 playing = player.isPlaying
-                bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
+                bufferPercent = bufferProgressPercent(player, streamingProfile)
                 if (isLive) {
                     if (playbackState == Player.STATE_BUFFERING && lastLivePlaybackState != Player.STATE_BUFFERING) {
                         liveBufferEvents += 1
@@ -287,7 +296,7 @@ fun PlayerScreen(
             position = max(0L, player.currentPosition)
             duration = normalizedDuration(player)
             buffered = max(0L, player.bufferedPosition)
-            bufferPercent = player.bufferedPercentage.coerceIn(0, 100)
+            bufferPercent = bufferProgressPercent(player, streamingProfile)
             playing = player.isPlaying
             buffering = player.playbackState == Player.STATE_BUFFERING
             persistProgress()
@@ -467,16 +476,10 @@ fun PlayerScreen(
         }
 
         if (buffering) {
-            Column(
-                Modifier.align(Alignment.Center).clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.78f)).padding(horizontal = 24.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("${pt(language, "Connecting", "جاري الاتصال")} $bufferPercent%", color = Color.White, fontSize = 14.sp)
-                Spacer(Modifier.height(9.dp))
-                Box(Modifier.width(180.dp).height(5.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = 0.15f))) {
-                    Box(Modifier.fillMaxHeight().fillMaxWidth((bufferPercent / 100f).coerceIn(0.04f, 1f)).background(PlayerAccent))
-                }
-            }
+            BufferingIndicator(
+                modifier = Modifier.align(Alignment.Center),
+                percent = bufferPercent
+            )
         }
 
         if (isLive && channelDrawerVisible) {
@@ -615,6 +618,16 @@ private fun StreamQualityBadge(
         ConnectionGrade.OFFLINE -> pt(language, "Offline", "غير متصل")
         ConnectionGrade.CHECKING -> pt(language, "Checking", "جاري الفحص")
     }
+    if (!detailed) {
+        Text(
+            "▂▄▆█",
+            modifier = modifier.clip(RoundedCornerShape(8.dp)).background(Color.Black.copy(alpha = .56f)).padding(horizontal = 7.dp, vertical = 4.dp),
+            color = color,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold
+        )
+        return
+    }
     Row(
         modifier.clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = .72f))
             .border(1.dp, color.copy(alpha = .55f), RoundedCornerShape(14.dp))
@@ -634,6 +647,43 @@ private fun StreamQualityBadge(
             }
         }
     }
+}
+
+@Composable
+private fun BufferingIndicator(modifier: Modifier, percent: Int?) {
+    val transition = rememberInfiniteTransition(label = "buffering")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 850, easing = LinearEasing)),
+        label = "bufferingRotation"
+    )
+    Box(
+        modifier.size(58.dp).clip(CircleShape).background(Color.Black.copy(alpha = .68f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(42.dp)) {
+            drawArc(
+                color = PlayerAccent,
+                startAngle = rotation,
+                sweepAngle = 250f,
+                useCenter = false,
+                style = Stroke(width = 3.dp.toPx())
+            )
+        }
+        if (percent != null) {
+            Text("$percent%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+private fun bufferProgressPercent(player: Player, profile: StreamingProfile): Int? {
+    if (player.playbackState != Player.STATE_BUFFERING) return null
+    val bufferedMs = player.totalBufferedDuration
+    if (bufferedMs <= 0L) return null
+    val targetMs = if (player.currentPosition <= 0L) profile.playbackBufferMs else profile.rebufferMs
+    if (targetMs <= 0) return null
+    return ((bufferedMs * 100L) / targetMs.toLong()).toInt().coerceIn(0, 100)
 }
 
 @Composable

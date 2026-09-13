@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.3.8-navigation-icons"
+        versionCode = 19
+        versionName = "0.3.9-stability-speed"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

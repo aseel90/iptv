@@ -59,7 +59,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         if (_account.value != null) loadLive()
-        probeServers()
     }
 
     private fun accountKey(account: PlaylistAccount): String =
@@ -126,7 +125,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 store.save(account)
                 accounts.value = store.accounts()
                 _account.value = account
-                probeServers()
                 channels.value = loadedChannels
                 movies.value = emptyList()
                 series.value = emptyList()
@@ -171,7 +169,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     selectedSeriesDetails.value = null
                 }
                 serverQualities.value = serverQualities.value - accountKey(original)
-                probeServers()
             }.onFailure { error.value = friendlyError(it) }
             loading.value = false
         }
@@ -218,7 +215,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             selectedSeriesDetails.value = null
             if (_account.value != null) loadLive(force = true)
         }
-        probeServers()
     }
 
     fun loadLive(force: Boolean = false) {
