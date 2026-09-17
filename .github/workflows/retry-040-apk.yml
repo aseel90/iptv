@@ -71,7 +71,6 @@ jobs:
           gradle = Path('app/build.gradle.kts')
           gradle.write_text(gradle.read_text().replace('versionCode = 19', 'versionCode = 20').replace('versionName = "0.3.9-stability-speed"', 'versionName = "0.4.0-account-foundation"'))
           PY
-          sed -i '/android-actions\/setup-android@v3/d' .github/workflows/export-040-apk.yml
       - name: Verify account foundation and unchanged playback
         run: |
           set -euxo pipefail
@@ -105,21 +104,12 @@ jobs:
         run: |
           set -euxo pipefail
           APK=app/build/outputs/apk/debug/app-debug.apk
-          mkdir -p ci-artifacts relay/selyro
-          rm -f relay/selyro/apk.b64.part-*
+          mkdir -p ci-artifacts
           cp "$APK" ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk
-          SHA=$(sha256sum "$APK" | awk '{print $1}')
           sha256sum ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk > ci-artifacts/Selyro-TV-v0.4.0-account-foundation.sha256
-          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
-          cat > relay/selyro/manifest.env <<EOF2
-          VERSION_CODE=20
-          VERSION_NAME=0.4.0-account-foundation
-          SHA256=$SHA
-          NOTES=Account foundation update: each IPTV provider now has a stable account identity. Favorites, recent history and resume progress are isolated per server, existing 0.3.9 data is migrated safely to the active provider, and deleting a server removes only that server's local state. Playback and stream handling are unchanged.
-          EOF2
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/export-040-apk.yml app/build.gradle.kts app/src/main/java/com/selyro/tv/model/Models.kt app/src/main/java/com/selyro/tv/data/AccountStore.kt app/src/main/java/com/selyro/tv/ui/AppViewModel.kt app/src/test/java/com/selyro/tv/model/AccountIdentityTest.kt ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk ci-artifacts/Selyro-TV-v0.4.0-account-foundation.sha256 relay/selyro
+          git add app/build.gradle.kts app/src/main/java/com/selyro/tv/model/Models.kt app/src/main/java/com/selyro/tv/data/AccountStore.kt app/src/main/java/com/selyro/tv/ui/AppViewModel.kt app/src/test/java/com/selyro/tv/model/AccountIdentityTest.kt ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk ci-artifacts/Selyro-TV-v0.4.0-account-foundation.sha256
           git commit -m '[skip ci] Release Selyro TV v0.4.0 account foundation'
           git push origin HEAD:release/0.4.0-account-foundation
       - uses: actions/upload-artifact@v4
