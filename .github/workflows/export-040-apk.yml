@@ -1,0 +1,150 @@
+name: Export Selyro TV 0.4.0 APK
+
+on:
+  push:
+    branches: ['release/0.4.0-account-foundation']
+    paths-ignore:
+      - 'ci-artifacts/**'
+      - 'relay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.4.0-account-foundation
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Gradle 8.13
+        run: |
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+      - name: Apply 0.4.0 account foundation source
+        shell: bash
+        env:
+          ACCOUNT_STORE_GZ_B64: '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'
+          ACCOUNT_TEST_GZ_B64: 'H4sICC82rGoAA0FjY291bnRJZGVudGl0eVRlc3Qua3QAjZJNb8IwDIbv/RVRT60EQdtukyaNTRw4bEPQSbtmiWEZaVLyUagm/vuSQjsKaJBLHeXxW/u1C0KXZAGIqhwbEJVW2JY4VwxEFPG8UNoipRf420lu8dAY0BaT+jNaOSLMBehVXcdl2sEpkoGxUUSFZ9CQUuWkHTOQltsqPKGfCPnzWGMhmjuJJKz3qJkCBV7CzJJPAe+SrxyMmUnSfV44JRFozrXXekATQSrBjd2nJ/GbhLiH4i9ri/vBQEnAsCF5ISBOOwIGqJLsnEK2VgcKdq0OFFqJPweSuhTMGebGO/ckiFwmaXqO3P3zEtra3yr3UJt5DJ+Qu4iqokokycE3GE8hRCxO2/xtdGYIsCkEp9xPa+Z06WdgnjXUkyNiKNkMdAl6xLg9nYbSfMGlD07tbLlwmoomWpWcgY57nWdT/yIAzfgEa83vos6zjZqn+uF+hBTeobXSrEHC/QixVREUZsppCpm/4I9sOhq+dCleS5BdQ/2b27u4fT7YiOADeHcg0I0hu0H806TxXfrtv6JLT13qMiB1l+fq6+xLp5vevu6D9dhGvxb2WLVlBAAA'
+        run: |
+          set -euxo pipefail
+          printf '%s' "$ACCOUNT_STORE_GZ_B64" | base64 -d | gzip -d > app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          mkdir -p app/src/test/java/com/selyro/tv/model
+          printf '%s' "$ACCOUNT_TEST_GZ_B64" | base64 -d | gzip -d > app/src/test/java/com/selyro/tv/model/AccountIdentityTest.kt
+          python - <<'PY'
+          from pathlib import Path
+
+          models = Path('app/src/main/java/com/selyro/tv/model/Models.kt')
+          text = models.read_text()
+          if 'import java.util.UUID' not in text:
+              text = text.replace('package com.selyro.tv.model\n\n', 'package com.selyro.tv.model\n\nimport java.util.UUID\n\n')
+          if 'val id: String = UUID.randomUUID().toString()' not in text:
+              text = text.replace(
+                  '    val type: SourceType = SourceType.XTREAM\n)',
+                  '    val type: SourceType = SourceType.XTREAM,\n    val id: String = UUID.randomUUID().toString()\n)'
+              )
+          models.write_text(text)
+
+          vm = Path('app/src/main/java/com/selyro/tv/ui/AppViewModel.kt')
+          text = vm.read_text()
+          text = text.replace(
+              '    private fun accountKey(account: PlaylistAccount): String =\n        "${account.type}:${account.server.trim()}:${account.username}"\n\n    fun qualityFor',
+              '    private fun accountKey(account: PlaylistAccount): String = account.id\n\n    private fun refreshScopedState() {\n        favorites.value = store.favorites()\n        recents.value = store.recents()\n        playbackProgress.value = store.playbackProgress()\n    }\n\n    fun qualityFor'
+          )
+          text = text.replace(
+              '                store.save(account)\n                accounts.value = store.accounts()\n                _account.value = account\n',
+              '                val savedAccount = store.save(account)\n                accounts.value = store.accounts()\n                _account.value = savedAccount\n                refreshScopedState()\n'
+          )
+          text = text.replace(
+              '                store.replace(original, updated)\n                accounts.value = store.accounts()\n                if (wasActive) {\n                    _account.value = updated\n',
+              '                val savedAccount = store.replace(original, updated)\n                accounts.value = store.accounts()\n                if (wasActive) {\n                    _account.value = savedAccount\n                    refreshScopedState()\n'
+          )
+          text = text.replace(
+              '        _account.value = store.load()\n        if (_account.value != null && channels.value.isEmpty()) loadLive(force = true)\n',
+              '        _account.value = store.load()\n        refreshScopedState()\n        if (_account.value != null && channels.value.isEmpty()) loadLive(force = true)\n'
+          )
+          text = text.replace(
+              '        _account.value = target\n        channels.value = emptyList()\n',
+              '        _account.value = target\n        refreshScopedState()\n        channels.value = emptyList()\n'
+          )
+          text = text.replace(
+              '            _account.value = store.load()\n            channels.value = emptyList()\n',
+              '            _account.value = store.load()\n            refreshScopedState()\n            channels.value = emptyList()\n'
+          )
+          vm.write_text(text)
+
+          gradle = Path('app/build.gradle.kts')
+          text = gradle.read_text().replace('versionCode = 19', 'versionCode = 20').replace('versionName = "0.3.9-stability-speed"', 'versionName = "0.4.0-account-foundation"')
+          gradle.write_text(text)
+          PY
+      - name: Verify account-foundation contract
+        run: |
+          set -euxo pipefail
+          grep -q 'versionCode = 20' app/build.gradle.kts
+          grep -q 'versionName = "0.4.0-account-foundation"' app/build.gradle.kts
+          grep -q 'val id: String = UUID.randomUUID().toString()' app/src/main/java/com/selyro/tv/model/Models.kt
+          grep -q 'accounts_v3' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'active_account_id' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'favorites_v2.' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'recent_v2.' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'playback_progress_v2.' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'migrateLegacyScopedState' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'clearScopedState(removed.id)' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'refreshScopedState' app/src/main/java/com/selyro/tv/ui/AppViewModel.kt
+          git diff --exit-code origin/release/0.3.9-stability-speed -- app/src/main/java/com/selyro/tv/player app/src/main/java/com/selyro/tv/iptv app/src/main/java/com/selyro/tv/update app/src/main/AndroidManifest.xml
+      - name: Test lint and build
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Re-sign with stable Selyro QA key
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          $ANDROID_HOME/build-tools/36.0.0/apksigner sign --key /tmp/selyro-testkey.pk8 --cert /tmp/selyro-testkey.x509.pem --out /tmp/Selyro-TV-signed.apk "$APK"
+          mv /tmp/Selyro-TV-signed.apk "$APK"
+          $ANDROID_HOME/build-tools/36.0.0/apksigner verify --print-certs "$APK"
+      - name: Verify APK identity and version
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/36.0.0/aapt dump badging "$APK" | tee /tmp/apk-badging.txt
+          grep -q "package: name='com.selyro.tv' versionCode='20'" /tmp/apk-badging.txt
+          grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
+          grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+      - name: Commit source and export updater APK
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p ci-artifacts relay/selyro
+          rm -f relay/selyro/apk.b64.part-*
+          cp "$APK" ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          sha256sum ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk > ci-artifacts/Selyro-TV-v0.4.0-account-foundation.sha256
+          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
+          cat > relay/selyro/manifest.env <<EOF2
+          VERSION_CODE=20
+          VERSION_NAME=0.4.0-account-foundation
+          SHA256=$SHA
+          NOTES=Account foundation update: each IPTV provider now has a stable account identity. Favorites, recent history and resume progress are isolated per server, existing 0.3.9 data is migrated safely to the active provider, and deleting a server removes only that server's local state. Playback and stream handling are unchanged.
+          EOF2
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/build.gradle.kts app/src/main/java/com/selyro/tv/model/Models.kt app/src/main/java/com/selyro/tv/data/AccountStore.kt app/src/main/java/com/selyro/tv/ui/AppViewModel.kt app/src/test/java/com/selyro/tv/model/AccountIdentityTest.kt ci-artifacts/Selyro-TV-v0.4.0-account-foundation.apk ci-artifacts/Selyro-TV-v0.4.0-account-foundation.sha256 relay/selyro
+          git commit -m 'Release Selyro TV v0.4.0 account foundation' || exit 0
+          git push origin HEAD:release/0.4.0-account-foundation
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Selyro-TV-v0.4.0-account-foundation
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
