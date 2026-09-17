@@ -61,8 +61,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (_account.value != null) loadLive()
     }
 
-    private fun accountKey(account: PlaylistAccount): String =
-        "${account.type}:${account.server.trim()}:${account.username}"
+    private fun accountKey(account: PlaylistAccount): String = account.id
+
+    private fun refreshScopedState() {
+        favorites.value = store.favorites()
+        recents.value = store.recents()
+        playbackProgress.value = store.playbackProgress()
+    }
 
     fun qualityFor(account: PlaylistAccount): ServerConnectionQuality? = serverQualities.value[accountKey(account)]
 
@@ -122,9 +127,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 require(loadedChannels.isNotEmpty()) { "No live channels were returned" }
-                store.save(account)
+                val savedAccount = store.save(account)
                 accounts.value = store.accounts()
-                _account.value = account
+                _account.value = savedAccount
+                refreshScopedState()
                 channels.value = loadedChannels
                 movies.value = emptyList()
                 series.value = emptyList()
@@ -157,10 +163,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 require(loadedChannels.isNotEmpty()) { "No live channels were returned" }
                 val wasActive = _account.value == original
-                store.replace(original, updated)
+                val savedAccount = store.replace(original, updated)
                 accounts.value = store.accounts()
                 if (wasActive) {
-                    _account.value = updated
+                    _account.value = savedAccount
+                    refreshScopedState()
                     providerInfo.value = loadedProvider
                     channels.value = loadedChannels
                     movies.value = emptyList()
@@ -183,6 +190,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelAddAccount() {
         addingAccount.value = false
         _account.value = store.load()
+        refreshScopedState()
         if (_account.value != null && channels.value.isEmpty()) loadLive(force = true)
     }
 
@@ -190,6 +198,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (_account.value == target) return
         store.setActive(target)
         _account.value = target
+        refreshScopedState()
         channels.value = emptyList()
         movies.value = emptyList()
         series.value = emptyList()
@@ -207,6 +216,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         serverQualities.value = serverQualities.value - accountKey(target)
         if (wasActive) {
             _account.value = store.load()
+            refreshScopedState()
             channels.value = emptyList()
             movies.value = emptyList()
             series.value = emptyList()

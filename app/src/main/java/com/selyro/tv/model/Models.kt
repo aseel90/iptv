@@ -1,5 +1,7 @@
 package com.selyro.tv.model
 
+import java.util.UUID
+
 enum class SourceType { XTREAM, M3U }
 
 data class PlaylistAccount(
@@ -7,7 +9,8 @@ data class PlaylistAccount(
     val server: String,
     val username: String = "",
     val password: String = "",
-    val type: SourceType = SourceType.XTREAM
+    val type: SourceType = SourceType.XTREAM,
+    val id: String = UUID.randomUUID().toString()
 )
 
 data class Channel(
