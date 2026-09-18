@@ -1,0 +1,104 @@
+name: Release Selyro TV 0.4.1 Resume Search UX
+
+on:
+  push:
+    branches: ['release/0.4.1-resume-search-ux']
+    paths:
+      - '.github/workflows/release-041-resume-search.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/0.4.1-resume-search-ux
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 36
+        run: |
+          set -euxo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install Gradle 8.13
+        run: |
+          set -euxo pipefail
+          curl -fsSL https://services.gradle.org/distributions/gradle-8.13-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          echo "/tmp/gradle-8.13/bin" >> "$GITHUB_PATH"
+
+      - name: Apply resume and search UX patch
+        run: |
+          set -euxo pipefail
+          python .ci/apply_041.py
+
+      - name: Verify 0.4.1 contract
+        run: |
+          set -euxo pipefail
+          grep -q 'versionCode = 21' app/build.gradle.kts
+          grep -q 'versionName = "0.4.1-resume-search-ux"' app/build.gradle.kts
+          grep -q 'if (safeDuration <= 0L) return' app/src/main/java/com/selyro/tv/data/AccountStore.kt
+          grep -q 'snapshotDuration' app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt
+          grep -q 'ResumePlaybackDialog' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'TvSearchInput' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'OK to search' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          ! grep -q 'TvInput(tx("Search channels"' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          git diff --exit-code origin/release/0.4.0-account-foundation -- app/src/main/java/com/selyro/tv/player/PlayerFactory.kt app/src/main/java/com/selyro/tv/player/StreamingProfile.kt app/src/main/java/com/selyro/tv/iptv app/src/main/java/com/selyro/tv/update app/src/main/AndroidManifest.xml
+
+      - name: Test lint and build
+        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+
+      - name: Sign and verify APK
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.pk8 -o /tmp/selyro-testkey.pk8
+          curl -fsSL https://raw.githubusercontent.com/aosp-mirror/platform_build/main/target/product/security/testkey.x509.pem -o /tmp/selyro-testkey.x509.pem
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --key /tmp/selyro-testkey.pk8 --cert /tmp/selyro-testkey.x509.pem --out /tmp/Selyro-TV-signed.apk "$APK"
+          mv /tmp/Selyro-TV-signed.apk "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/apk-badging.txt
+          grep -q "package: name='com.selyro.tv' versionCode='21'" /tmp/apk-badging.txt
+          grep -q "application-label:'Selyro TV'" /tmp/apk-badging.txt
+          grep -q "leanback-launchable-activity: name='com.selyro.tv.MainActivity'" /tmp/apk-badging.txt
+
+      - name: Export verified update
+        run: |
+          set -euxo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p ci-artifacts relay/selyro
+          rm -f relay/selyro/apk.b64.part-*
+          cp "$APK" ci-artifacts/Selyro-TV-v0.4.1-resume-search-ux.apk
+          SHA=$(sha256sum "$APK" | awk '{print $1}')
+          sha256sum ci-artifacts/Selyro-TV-v0.4.1-resume-search-ux.apk > ci-artifacts/Selyro-TV-v0.4.1-resume-search-ux.sha256
+          base64 -w0 "$APK" | split -b 700k - relay/selyro/apk.b64.part-
+          cat > relay/selyro/manifest.env <<EOF2
+          VERSION_CODE=21
+          VERSION_NAME=0.4.1-resume-search-ux
+          SHA256=$SHA
+          NOTES=Resume and TV search UX: movies and episodes keep their valid watch position across app restarts, reopening partially watched content shows a simple Continue from time or Start over prompt, and search no longer opens the keyboard while navigating with the remote. The keyboard opens only after pressing the search box.
+          EOF2
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/build.gradle.kts app/src/main/java/com/selyro/tv/data/AccountStore.kt app/src/main/java/com/selyro/tv/ui/PlayerScreen.kt app/src/main/java/com/selyro/tv/ui/SelyroApp.kt ci-artifacts/Selyro-TV-v0.4.1-resume-search-ux.apk ci-artifacts/Selyro-TV-v0.4.1-resume-search-ux.sha256 relay/selyro
+          git commit -m '[skip ci] Release Selyro TV v0.4.1 resume search UX'
+          git push origin HEAD:release/0.4.1-resume-search-ux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Selyro-TV-v0.4.1-resume-search-ux
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
