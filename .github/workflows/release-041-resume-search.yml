@@ -59,7 +59,24 @@ jobs:
           git diff --exit-code origin/release/0.4.0-account-foundation -- app/src/main/java/com/selyro/tv/player/PlayerFactory.kt app/src/main/java/com/selyro/tv/player/StreamingProfile.kt app/src/main/java/com/selyro/tv/iptv app/src/main/java/com/selyro/tv/update app/src/main/AndroidManifest.xml
 
       - name: Test lint and build
-        run: gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          mkdir -p ci-status
+          gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace 2>&1 | tee ci-status/041-gradle.log
+          code=${PIPESTATUS[0]}
+          echo "$code" > ci-status/041-exit.txt
+          exit "$code"
+
+      - name: Commit failure diagnostics
+        if: failure()
+        run: |
+          set -euxo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ci-status || true
+          git diff --cached --quiet && exit 0
+          git commit -m '[skip ci] ci: capture 0.4.1 build failure'
+          git push origin HEAD:release/0.4.1-resume-search-ux
 
       - name: Sign and verify APK
         run: |
