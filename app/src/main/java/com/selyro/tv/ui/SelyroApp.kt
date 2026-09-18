@@ -96,11 +96,10 @@ private data class PlayRequest(
     val id: String,
     val title: String,
     val url: String,
-    val group: String? = null
+    val group: String? = null,
+    val subtitle: String? = null,
+    val containerExtension: String? = null
 )
-
-private fun serverQualityKey(account: PlaylistAccount): String =
-    "${account.type}:${account.server.trim()}:${account.username}"
 
 @Composable
 fun SelyroApp(vm: AppViewModel = viewModel()) {
@@ -144,7 +143,7 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
     }
 
     fun startPlayback(request: PlayRequest, resume: Boolean) {
-        vm.markWatched(request.kind, request.id)
+        vm.markWatched(request.kind, request.id, request.title, request.subtitle, request.containerExtension)
         val manager = playback ?: PlaybackManager(context, profile).also { playback = it }
         val startPosition = if (resume) vm.resumePosition(request.kind, request.id) else 0L
         if (!resume && request.kind != "live") vm.clearPlaybackProgress(request.kind, request.id)
@@ -229,7 +228,7 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                                 )
                             } else null,
                             onLiveTune = { channel ->
-                                vm.markWatched("live", channel.id)
+                                vm.markWatched("live", channel.id, channel.name, channel.group)
                                 activePlayback.play(channel.url, channel.name)
                                 playing = PlayRequest("live", channel.id, channel.name, channel.url, channel.group)
                             },
@@ -313,7 +312,15 @@ private fun LoginScreen(vm: AppViewModel) {
 private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdates: () -> Unit, onUpdate: (UpdateInfo) -> Unit, backEnabled: Boolean = true, onPlay: (PlayRequest) -> Unit) {
     var section by remember { mutableStateOf(Section.HOME) }; val error by vm.error.collectAsState(); val context = LocalContext.current; var showExit by remember { mutableStateOf(false) }
     BackHandler(enabled = backEnabled) { if (section != Section.HOME) section = Section.HOME else showExit = true }
-    LaunchedEffect(section) { when (section) { Section.LIVE -> vm.loadLive(); Section.MOVIES -> vm.ensureMovies(); Section.SERIES -> vm.ensureSeries(); else -> Unit } }
+    LaunchedEffect(section) {
+        when (section) {
+            Section.LIVE -> vm.loadLive()
+            Section.MOVIES -> vm.ensureMovies()
+            Section.SERIES -> vm.ensureSeries()
+            Section.FAVORITES, Section.RECENT -> vm.ensureMovies()
+            else -> Unit
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact = maxWidth < 1100.dp; val railWidth = if (compact) 170.dp else 208.dp; val contentPadding = if (compact) 16.dp else 26.dp
         Row(Modifier.fillMaxSize()) {
@@ -465,13 +472,13 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
         when {
             loading == "Episodes" -> LoadingBox(tx("Loading episodes…", "جاري تحميل الحلقات…"))
             openedEpisodes.isEmpty() -> Column { Text(tx("No episodes returned", "لم يتم العثور على حلقات"), color = Muted); Spacer(Modifier.height(10.dp)); TvButton(tx("RETRY", "إعادة المحاولة"), true) { vm.loadSeriesDetails(openedSeries) } }
-            else -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(openedEpisodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty(), progress = progress["episode:${ep.id}"]?.fraction) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl)) } } }
+            else -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) { items(openedEpisodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty(), progress = progress["episode:${ep.id}"]?.fraction) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl, subtitle = "${openedSeries.name} • S${ep.season} E${ep.episode}", containerExtension = ep.containerExtension)) } } }
         }
         return
     }
 
     Heading(tx("Series", "المسلسلات"), if (all.isEmpty()) tx("Xtream series", "مسلسلات Xtream") else "${all.size} ${tx("series", "مسلسل")} • ${categories.size} ${tx("categories", "تصنيف")}"); TvSearchInput(tx("Search series", "بحث في المسلسلات"), query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Series" && all.isEmpty()) { LoadingBox(tx("Loading series…", "جاري تحميل المسلسلات…")); return }
-    BoxWithConstraints(Modifier.fillMaxSize()) { val showEpisodes = maxWidth >= 880.dp && mode == DisplayMode.LIST; val categoryWidth = if (maxWidth < 850.dp) 150.dp else 185.dp; Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { LazyColumn(Modifier.width(categoryWidth), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(listOf("All") + categories) { c -> val count = if (c == "All") all.size else all.count { it.category == c }; TvNavItem("${if (c == "All") tx("All", "الكل") else c} ($count)", category == c) { category = c; selected = null; vm.clearSeriesDetails() } } }; if (mode == DisplayMode.GRID) { LazyVerticalGrid(columns = GridCells.Adaptive(145.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) { gridItems(filtered, key = { it.id }) { item -> MediaGridCard(item.name, item.poster, item.year, onFocus = { selected = item }) { selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) } } } } else { LazyColumn(Modifier.weight(if (showEpisodes) 1.05f else 1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(filtered, key = { it.id }) { item -> TvListItem(item.name, item.category, onFocus = { selected = item }) { selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) } } }; if (showEpisodes) { Column(Modifier.weight(.95f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(16.dp)) { val current = selected; if (current == null) { Text(tx("Select a series", "اختر مسلسلًا"), color = Muted); return@Column }; Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) { AsyncImage(current.poster, null, Modifier.width(82.dp).height(116.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop); Column(Modifier.weight(1f)) { Text(current.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2); Text(listOfNotNull(current.year, current.category).filter { it.isNotBlank() }.joinToString(" • "), color = Accent, fontSize = 12.sp, maxLines = 1); if (!current.plot.isNullOrBlank()) { Spacer(Modifier.height(5.dp)); Text(current.plot.orEmpty(), color = Muted, fontSize = 12.sp, maxLines = 3) } } }; Spacer(Modifier.height(9.dp)); TvButton(tx("LOAD EPISODES", "تحميل الحلقات"), true, modifier = Modifier.fillMaxWidth()) { vm.loadSeriesDetails(current) }; Spacer(Modifier.height(9.dp)); if (loading == "Episodes") Text(tx("Loading episodes…", "جاري تحميل الحلقات…"), color = Accent); val episodes = details?.takeIf { it.series.id == current.id }?.episodes.orEmpty(); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(episodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty(), progress = progress["episode:${ep.id}"]?.fraction) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl)) } } } } } } } }
+    BoxWithConstraints(Modifier.fillMaxSize()) { val showEpisodes = maxWidth >= 880.dp && mode == DisplayMode.LIST; val categoryWidth = if (maxWidth < 850.dp) 150.dp else 185.dp; Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { LazyColumn(Modifier.width(categoryWidth), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(listOf("All") + categories) { c -> val count = if (c == "All") all.size else all.count { it.category == c }; TvNavItem("${if (c == "All") tx("All", "الكل") else c} ($count)", category == c) { category = c; selected = null; vm.clearSeriesDetails() } } }; if (mode == DisplayMode.GRID) { LazyVerticalGrid(columns = GridCells.Adaptive(145.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) { gridItems(filtered, key = { it.id }) { item -> MediaGridCard(item.name, item.poster, item.year, onFocus = { selected = item }) { selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) } } } } else { LazyColumn(Modifier.weight(if (showEpisodes) 1.05f else 1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(filtered, key = { it.id }) { item -> TvListItem(item.name, item.category, onFocus = { selected = item }) { selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) } } }; if (showEpisodes) { Column(Modifier.weight(.95f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(16.dp)) { val current = selected; if (current == null) { Text(tx("Select a series", "اختر مسلسلًا"), color = Muted); return@Column }; Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) { AsyncImage(current.poster, null, Modifier.width(82.dp).height(116.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop); Column(Modifier.weight(1f)) { Text(current.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2); Text(listOfNotNull(current.year, current.category).filter { it.isNotBlank() }.joinToString(" • "), color = Accent, fontSize = 12.sp, maxLines = 1); if (!current.plot.isNullOrBlank()) { Spacer(Modifier.height(5.dp)); Text(current.plot.orEmpty(), color = Muted, fontSize = 12.sp, maxLines = 3) } } }; Spacer(Modifier.height(9.dp)); TvButton(tx("LOAD EPISODES", "تحميل الحلقات"), true, modifier = Modifier.fillMaxWidth()) { vm.loadSeriesDetails(current) }; Spacer(Modifier.height(9.dp)); if (loading == "Episodes") Text(tx("Loading episodes…", "جاري تحميل الحلقات…"), color = Accent); val episodes = details?.takeIf { it.series.id == current.id }?.episodes.orEmpty(); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(episodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty(), progress = progress["episode:${ep.id}"]?.fraction) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl, subtitle = "${current.name} • S${ep.season} E${ep.episode}", containerExtension = ep.containerExtension)) } } } } } } } }
 }
 
 @Composable private fun FavoritesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
@@ -499,7 +506,41 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
     }
 }
 
-@Composable private fun RecentScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) { val channels by vm.channels.collectAsState(); val movies by vm.movies.collectAsState(); val recents by vm.recents.collectAsState(); val progress by vm.playbackProgress.collectAsState(); val lookup = remember(channels, movies) { buildMap<String, PlayRequest> { channels.forEach { put("live:${it.id}", PlayRequest("live", it.id, it.name, it.url, it.group)) }; movies.forEach { put("movie:${it.id}", PlayRequest("movie", it.id, it.name, it.streamUrl)) } } }; Heading(tx("Recent", "المشاهدة الأخيرة"), tx("Continue where you left off", "تابع من حيث توقفت")); LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) { items(recents.mapNotNull { lookup[it] }, key = { "${it.kind}-${it.id}" }) { item -> TvListItem(item.title, if (item.kind == "live") tx("Live", "قناة") else tx("Movie", "فيلم"), progress = progress["${item.kind}:${item.id}"]?.fraction) { onPlay(item) } } } }
+@Composable
+private fun RecentScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
+    val channels by vm.channels.collectAsState()
+    val movies by vm.movies.collectAsState()
+    val recents by vm.recents.collectAsState()
+    val recentItems by vm.recentItems.collectAsState()
+    val progress by vm.playbackProgress.collectAsState()
+    val lookup = remember(channels, movies) {
+        buildMap<String, PlayRequest> {
+            channels.forEach { put("live:${it.id}", PlayRequest("live", it.id, it.name, it.url, it.group)) }
+            movies.forEach { put("movie:${it.id}", PlayRequest("movie", it.id, it.name, it.streamUrl)) }
+        }
+    }
+    val visible = recents.mapNotNull { key ->
+        lookup[key] ?: recentItems[key]?.let { item ->
+            if (item.kind == "episode") {
+                vm.episodeStreamUrl(item)?.let { url ->
+                    PlayRequest("episode", item.id, item.title, url, subtitle = item.subtitle, containerExtension = item.containerExtension)
+                }
+            } else null
+        }
+    }
+    Heading(tx("Recent", "المشاهدة الأخيرة"), tx("Continue where you left off", "تابع من حيث توقفت"))
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        items(visible, key = { "${it.kind}-${it.id}" }) { item ->
+            val typeLabel = when (item.kind) {
+                "live" -> tx("Live", "قناة")
+                "episode" -> tx("Episode", "حلقة")
+                else -> tx("Movie", "فيلم")
+            }
+            val subtitle = listOfNotNull(typeLabel, item.subtitle).filter { it.isNotBlank() }.joinToString(" • ")
+            TvListItem(item.title, subtitle, progress = progress["${item.kind}:${item.id}"]?.fraction) { onPlay(item) }
+        }
+    }
+}
 
 @Composable private fun SettingsScreen(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdates: () -> Unit, onUpdate: (UpdateInfo) -> Unit) {
     val account by vm.account.collectAsState()
@@ -524,7 +565,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
             SettingsCard(tx("Servers", "السيرفرات"), tx("Manage servers and see connection quality", "إدارة السيرفرات ومشاهدة جودة الاتصال")) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     accounts.forEach { saved ->
-                        val quality = qualities[serverQualityKey(saved)]
+                        val quality = qualities[saved.id]
                         Row(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF17212A)).padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically

@@ -2,6 +2,7 @@ package com.selyro.tv.data
 
 import android.content.Context
 import com.selyro.tv.model.PlaylistAccount
+import com.selyro.tv.model.RecentMedia
 import com.selyro.tv.model.SourceType
 import com.selyro.tv.player.StreamingProfile
 import org.json.JSONArray
@@ -285,6 +286,7 @@ class AccountStore(context: Context) {
 
     private fun favoritesKey(accountId: String) = "favorites_v2.$accountId"
     private fun recentsKey(accountId: String) = "recent_v2.$accountId"
+    private fun recentItemsKey(accountId: String) = "recent_items_v3.$accountId"
     private fun progressKey(accountId: String) = "playback_progress_v2.$accountId"
 
     private fun clearScopedState(accountId: String) {
@@ -292,6 +294,7 @@ class AccountStore(context: Context) {
         prefs.edit()
             .remove(favoritesKey(accountId))
             .remove(recentsKey(accountId))
+            .remove(recentItemsKey(accountId))
             .remove(progressKey(accountId))
             .apply()
     }
@@ -323,6 +326,51 @@ class AccountStore(context: Context) {
     fun recents(): List<String> {
         val accountId = currentAccountId() ?: return emptyList()
         return prefs.getString(recentsKey(accountId), "").orEmpty().split('|').filter { it.isNotBlank() }
+    }
+
+    fun setRecentItem(item: RecentMedia) {
+        val accountId = currentAccountId() ?: return
+        if (item.kind.isBlank() || item.id.isBlank() || item.title.isBlank()) return
+        val prefKey = recentItemsKey(accountId)
+        val root = runCatching { JSONObject(prefs.getString(prefKey, "{}") ?: "{}") }.getOrDefault(JSONObject())
+        val key = "${item.kind}:${item.id}"
+        root.put(key, JSONObject().apply {
+            put("kind", item.kind)
+            put("id", item.id)
+            put("title", item.title)
+            put("subtitle", item.subtitle.orEmpty())
+            put("extension", item.containerExtension.orEmpty())
+        })
+        val allowed = recents().take(50).toSet()
+        val keys = root.keys().asSequence().toList()
+        keys.filterNot { it in allowed }.forEach(root::remove)
+        prefs.edit().putString(prefKey, root.toString()).apply()
+    }
+
+    fun recentItems(): Map<String, RecentMedia> {
+        val accountId = currentAccountId() ?: return emptyMap()
+        val raw = prefs.getString(recentItemsKey(accountId), null) ?: return emptyMap()
+        return runCatching {
+            val root = JSONObject(raw)
+            buildMap {
+                val keys = root.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val o = root.optJSONObject(key) ?: continue
+                    val kind = o.optString("kind")
+                    val id = o.optString("id")
+                    val title = o.optString("title")
+                    if (kind.isBlank() || id.isBlank() || title.isBlank()) continue
+                    put(key, RecentMedia(
+                        kind = kind,
+                        id = id,
+                        title = title,
+                        subtitle = o.optString("subtitle").takeIf { it.isNotBlank() },
+                        containerExtension = o.optString("extension").takeIf { it.isNotBlank() }
+                    ))
+                }
+            }
+        }.getOrDefault(emptyMap())
     }
 
     fun playbackProfile(): StreamingProfile = runCatching {

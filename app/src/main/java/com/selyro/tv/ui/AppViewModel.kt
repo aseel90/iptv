@@ -11,15 +11,11 @@ import com.selyro.tv.iptv.M3uClient
 import com.selyro.tv.iptv.XtreamClient
 import com.selyro.tv.model.*
 import com.selyro.tv.player.StreamingProfile
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.net.HttpURLConnection
-import java.net.URL
 
 
 enum class ConnectionGrade { CHECKING, EXCELLENT, GOOD, WEAK, OFFLINE }
@@ -48,6 +44,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val error = MutableStateFlow<String?>(null)
     val favorites = MutableStateFlow(store.favorites())
     val recents = MutableStateFlow(store.recents())
+    val recentItems = MutableStateFlow(store.recentItems())
     val playbackProfile = MutableStateFlow(store.playbackProfile())
     val language = MutableStateFlow(store.language())
     val displayMode = MutableStateFlow(store.displayMode())
@@ -66,6 +63,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun refreshScopedState() {
         favorites.value = store.favorites()
         recents.value = store.recents()
+        recentItems.value = store.recentItems()
         playbackProgress.value = store.playbackProgress()
     }
 
@@ -77,36 +75,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (serverQualities.value[key]?.grade == ConnectionGrade.CHECKING) return@forEach
             serverQualities.value = serverQualities.value + (key to ServerConnectionQuality(ConnectionGrade.CHECKING))
             viewModelScope.launch {
-                val result = withContext(Dispatchers.IO) { probeServer(target) }
+                val result = probeServer(target)
                 serverQualities.value = serverQualities.value + (key to result)
             }
         }
     }
 
-    private fun probeServer(account: PlaylistAccount): ServerConnectionQuality {
+    private suspend fun probeServer(account: PlaylistAccount): ServerConnectionQuality {
         val started = System.nanoTime()
-        return runCatching {
-            val url = URL(account.server.trim())
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 4_000
-                readTimeout = 4_000
-                instanceFollowRedirects = true
-                requestMethod = "HEAD"
-                setRequestProperty("User-Agent", "Selyro-TV/${com.selyro.tv.BuildConfig.VERSION_NAME}")
-            }
-            try {
-                connection.responseCode
-                val latency = ((System.nanoTime() - started) / 1_000_000L).coerceAtLeast(1L)
-                val grade = when {
-                    latency <= 250L -> ConnectionGrade.EXCELLENT
-                    latency <= 900L -> ConnectionGrade.GOOD
-                    else -> ConnectionGrade.WEAK
+        val connected = runCatching {
+            when (account.type) {
+                SourceType.XTREAM -> {
+                    require(account.username.isNotBlank() && account.password.isNotBlank())
+                    XtreamClient(account).authenticate() != null
                 }
-                ServerConnectionQuality(grade, latency)
-            } finally {
-                connection.disconnect()
+                SourceType.M3U -> M3uClient.fetch(account.server).channels.isNotEmpty()
             }
-        }.getOrElse { ServerConnectionQuality(ConnectionGrade.OFFLINE, null) }
+        }.getOrDefault(false)
+        if (!connected) return ServerConnectionQuality(ConnectionGrade.OFFLINE, null)
+        val latency = ((System.nanoTime() - started) / 1_000_000L).coerceAtLeast(1L)
+        val grade = when {
+            latency <= 350L -> ConnectionGrade.EXCELLENT
+            latency <= 1_200L -> ConnectionGrade.GOOD
+            else -> ConnectionGrade.WEAK
+        }
+        return ServerConnectionQuality(grade, latency)
     }
 
     fun login(account: PlaylistAccount) {
@@ -302,9 +295,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun isFavorite(kind: String, id: String): Boolean = "$kind:$id" in favorites.value
 
-    fun markWatched(kind: String, id: String) {
+    fun markWatched(
+        kind: String,
+        id: String,
+        title: String? = null,
+        subtitle: String? = null,
+        containerExtension: String? = null
+    ) {
         store.addRecent("$kind:$id")
+        if (!title.isNullOrBlank()) {
+            store.setRecentItem(RecentMedia(kind, id, title, subtitle, containerExtension))
+        }
         recents.value = store.recents()
+        recentItems.value = store.recentItems()
+    }
+
+    fun episodeStreamUrl(item: RecentMedia): String? {
+        val account = _account.value ?: return null
+        if (item.kind != "episode" || account.type != SourceType.XTREAM) return null
+        return XtreamClient(account).episodeStreamUrl(item.id, item.containerExtension ?: "mp4")
     }
 
     fun resumePosition(kind: String, id: String): Long =

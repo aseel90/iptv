@@ -107,6 +107,11 @@ class XtreamClient(private val account: PlaylistAccount) {
         }
     }
 
+    fun episodeStreamUrl(id: String, extension: String = "mp4"): String {
+        val ext = extension.ifBlank { "mp4" }
+        return "$base/series/${path(account.username)}/${path(account.password)}/$id.$ext"
+    }
+
     suspend fun seriesDetails(series: SeriesItem): SeriesDetails {
         val root = JSONObject(get("get_series_info", mapOf("series_id" to series.id)))
         val episodesObject = root.optJSONObject("episodes") ?: JSONObject()
@@ -125,7 +130,7 @@ class XtreamClient(private val account: PlaylistAccount) {
                     title = o.optString("title").ifBlank { "Episode ${o.optInt("episode_num", index + 1)}" },
                     season = seasonNumber,
                     episode = o.optInt("episode_num", index + 1),
-                    streamUrl = "$base/series/${path(account.username)}/${path(account.password)}/$id.$ext",
+                    streamUrl = episodeStreamUrl(id, ext),
                     containerExtension = ext,
                     plot = info?.optString("plot")?.takeIf { it.isNotBlank() },
                     duration = info?.optString("duration")?.takeIf { it.isNotBlank() }

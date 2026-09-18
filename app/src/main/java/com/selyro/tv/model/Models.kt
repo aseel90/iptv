@@ -60,6 +60,14 @@ data class SeriesDetails(
     val episodes: List<Episode>
 )
 
+data class RecentMedia(
+    val kind: String,
+    val id: String,
+    val title: String,
+    val subtitle: String? = null,
+    val containerExtension: String? = null
+)
+
 data class EpgProgram(
     val channelId: String,
     val title: String,
