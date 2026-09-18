@@ -155,6 +155,10 @@ fun PlayerScreen(
         liveChannels.indexOfFirst { it.id == liveContext?.currentChannelId }.coerceAtLeast(0)
     }
     val currentLiveChannel = liveChannels.getOrNull(currentLiveIndex)
+    // Keep player navigation physically consistent: remote Left always moves left and
+    // remote Right always moves right, regardless of the app's RTL/LTR language.
+    val channelDrawerAlignment = if (language == AppLanguage.ARABIC) Alignment.CenterEnd else Alignment.CenterStart
+    val liveInfoAlignment = if (language == AppLanguage.ARABIC) Alignment.CenterStart else Alignment.CenterEnd
     val streamGrade = when {
         !isLive -> ConnectionGrade.CHECKING
         livePlaybackError -> ConnectionGrade.OFFLINE
@@ -487,12 +491,12 @@ fun PlayerScreen(
         }
 
         if (isLive && channelDrawerVisible) {
-            LiveChannelDrawer(Modifier.align(Alignment.CenterStart), language, liveChannels, drawerCursor, liveContext?.currentChannelId)
+            LiveChannelDrawer(Modifier.align(channelDrawerAlignment), language, liveChannels, drawerCursor, liveContext?.currentChannelId)
         }
 
         if (isLive && liveInfoVisible) {
             LiveInfoPanel(
-                Modifier.align(Alignment.CenterEnd), language, currentLiveChannel, liveContext?.epg.orEmpty(),
+                Modifier.align(liveInfoAlignment), language, currentLiveChannel, liveContext?.epg.orEmpty(),
                 streamGrade, liveStartupMs, liveBufferEvents
             )
         }
@@ -538,21 +542,23 @@ private fun LiveControlHub(
         "${if (isFavorite) "★" else "☆"}  ${pt(language, "Favorite", "المفضلة")}",
         "ⓘ  ${pt(language, "Info", "معلومات")}" 
     )
-    Row(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(PlayerPanelStrong)
-            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp)).padding(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        labels.forEachIndexed { index, label ->
-            val enabled = when (index) { 1 -> hasAudio; 2 -> hasSubtitles; else -> true }
-            val focused = index == cursor
-            Box(
-                Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
-                    .background(if (focused) PlayerAccent else Color.White.copy(alpha = if (enabled) 0.08f else 0.035f))
-                    .padding(horizontal = 10.dp, vertical = 13.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(label, color = if (focused) Color.Black else if (enabled) Color.White else PlayerMuted.copy(alpha = .5f), fontSize = 12.sp, maxLines = 1)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Row(
+            modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(PlayerPanelStrong)
+                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp)).padding(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            labels.forEachIndexed { index, label ->
+                val enabled = when (index) { 1 -> hasAudio; 2 -> hasSubtitles; else -> true }
+                val focused = index == cursor
+                Box(
+                    Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                        .background(if (focused) PlayerAccent else Color.White.copy(alpha = if (enabled) 0.08f else 0.035f))
+                        .padding(horizontal = 10.dp, vertical = 13.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(label, color = if (focused) Color.Black else if (enabled) Color.White else PlayerMuted.copy(alpha = .5f), fontSize = 12.sp, maxLines = 1)
+                }
             }
         }
     }
@@ -809,11 +815,13 @@ private fun PlayerTrackPanel(modifier: Modifier, language: AppLanguage, tab: Tra
         modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(PlayerPanel)
             .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp)).padding(16.dp)
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TrackTabChip(pt(language, "Audio", "الصوت"), tab == TrackTab.AUDIO)
-            TrackTabChip(pt(language, "Subtitles", "الترجمة"), tab == TrackTab.SUBTITLES)
-            Spacer(Modifier.weight(1f))
-            Text(pt(language, "← → switch   ↑ ↓ choose   OK apply", "← → تبديل   ↑ ↓ اختيار   OK تطبيق"), color = PlayerMuted, fontSize = 11.sp)
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                TrackTabChip(pt(language, "Audio", "الصوت"), tab == TrackTab.AUDIO)
+                TrackTabChip(pt(language, "Subtitles", "الترجمة"), tab == TrackTab.SUBTITLES)
+                Spacer(Modifier.weight(1f))
+                Text(pt(language, "← → switch   ↑ ↓ choose   OK apply", "← → تبديل   ↑ ↓ اختيار   OK تطبيق"), color = PlayerMuted, fontSize = 11.sp)
+            }
         }
         Spacer(Modifier.height(12.dp))
         if (options.isEmpty()) Text(pt(language, "No tracks available", "لا توجد مسارات متاحة"), color = PlayerMuted, fontSize = 13.sp)

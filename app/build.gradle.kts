@@ -14,8 +14,8 @@ android {
         applicationId = "com.selyro.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.4.2-server-recent-hotfix"
+        versionCode = 23
+        versionName = "0.4.3-remote-navigation-hotfix"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
