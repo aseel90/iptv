@@ -22,6 +22,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -52,6 +54,7 @@ import com.selyro.tv.player.StreamingProfile
 import com.selyro.tv.update.UpdateInfo
 import com.selyro.tv.update.UpdateManager
 import com.selyro.tv.update.UpdateStatus
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val Bg = Color(0xFF05080D)
@@ -111,8 +114,11 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
     val hostActivity = localContext as? ComponentActivity
     var playback by remember { mutableStateOf<PlaybackManager?>(null) }
     var playing by remember { mutableStateOf<PlayRequest?>(null) }
+    var pendingResume by remember { mutableStateOf<PlayRequest?>(null) }
     var updateStatus by remember { mutableStateOf<UpdateStatus>(UpdateStatus.Idle) }
     val scope = rememberCoroutineScope()
+    val latestPlayback by rememberUpdatedState(playback)
+    val latestPlaying by rememberUpdatedState(playing)
 
     fun checkUpdates() {
         scope.launch {
@@ -137,11 +143,29 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
         }
     }
 
+    fun startPlayback(request: PlayRequest, resume: Boolean) {
+        vm.markWatched(request.kind, request.id)
+        val manager = playback ?: PlaybackManager(context, profile).also { playback = it }
+        val startPosition = if (resume) vm.resumePosition(request.kind, request.id) else 0L
+        if (!resume && request.kind != "live") vm.clearPlaybackProgress(request.kind, request.id)
+        manager.play(request.url, request.title, startPosition)
+        playing = request
+        pendingResume = null
+    }
+
     LaunchedEffect(Unit) { checkUpdates() }
     DisposableEffect(hostActivity) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
-                playback?.stop()
+                val request = latestPlaying
+                val manager = latestPlayback
+                if (request != null && request.kind != "live" && manager != null) {
+                    val durationMs = manager.player.duration.takeIf { it > 0L } ?: 0L
+                    if (durationMs > 0L) {
+                        vm.savePlaybackProgress(request.kind, request.id, manager.player.currentPosition.coerceAtLeast(0L), durationMs)
+                    }
+                }
+                manager?.stop()
                 playing = null
             }
         }
@@ -172,10 +196,12 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                         onUpdate = ::beginUpdate,
                         backEnabled = currentRequest == null
                     ) { request ->
-                        vm.markWatched(request.kind, request.id)
-                        val manager = playback ?: PlaybackManager(context, profile).also { playback = it }
-                        manager.play(request.url, request.title, vm.resumePosition(request.kind, request.id))
-                        playing = request
+                        val saved = if (request.kind == "live") null else vm.progressFor(request.kind, request.id)
+                        if (saved != null && saved.positionMs >= 10_000L && saved.fraction < .95f) {
+                            pendingResume = request
+                        } else {
+                            startPlayback(request, resume = false)
+                        }
                     }
 
                     if (currentRequest != null && activePlayback != null) {
@@ -216,6 +242,20 @@ fun SelyroApp(vm: AppViewModel = viewModel()) {
                         ) {
                             activePlayback.stop()
                             playing = null
+                        }
+                    }
+
+                    val resumeRequest = pendingResume
+                    if (resumeRequest != null) {
+                        vm.progressFor(resumeRequest.kind, resumeRequest.id)?.let { saved ->
+                            ResumePlaybackDialog(
+                                title = resumeRequest.title,
+                                positionMs = saved.positionMs,
+                                durationMs = saved.durationMs,
+                                onDismiss = { pendingResume = null },
+                                onResume = { startPlayback(resumeRequest, resume = true) },
+                                onRestart = { startPlayback(resumeRequest, resume = false) }
+                            )
                         }
                     }
                 }
@@ -343,7 +383,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
     LaunchedEffect(selected?.id) { selected?.let(vm::loadEpg) }
 
     Heading(tx("Live TV", "القنوات المباشرة"), "${all.size} ${tx("channels", "قناة")}")
-    TvInput(tx("Search channels", "بحث في القنوات"), query) { query = it }
+    TvSearchInput(tx("Search channels", "بحث في القنوات"), query) { query = it }
     Spacer(Modifier.height(12.dp))
     if (loading == "Live TV" && all.isEmpty()) {
         LoadingBox(tx("Loading channels…", "جاري تحميل القنوات…"))
@@ -400,7 +440,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
 
 @Composable private fun MoviesScreen(vm: AppViewModel, onPlay: (PlayRequest) -> Unit) {
     val all by vm.movies.collectAsState(); val loading by vm.loadingSection.collectAsState(); val mode by vm.displayMode.collectAsState(); val progress by vm.playbackProgress.collectAsState(); var query by remember { mutableStateOf("") }; var category by remember { mutableStateOf("All") }; var selected by remember { mutableStateOf<VodItem?>(null) }; val categories = remember(all) { all.map { it.category.ifBlank { "Other" } }.distinct().sorted() }; LaunchedEffect(categories) { if (categories.isNotEmpty() && category == "All") category = categories.first() }; val filtered = remember(all, query, category) { all.filter { (category == "All" || it.category == category) && (query.isBlank() || it.name.contains(query, true)) } }
-    Heading(tx("Movies", "الأفلام"), if (all.isEmpty()) "Xtream VOD" else "${all.size} ${tx("movies", "فيلم")} • ${categories.size} ${tx("categories", "تصنيف")}"); TvInput(tx("Search", "بحث") + " ${if (category == "All") tx("movies", "في الأفلام") else category}", query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Movies" && all.isEmpty()) { LoadingBox(tx("Loading movies…", "جاري تحميل الأفلام…")); return }
+    Heading(tx("Movies", "الأفلام"), if (all.isEmpty()) "Xtream VOD" else "${all.size} ${tx("movies", "فيلم")} • ${categories.size} ${tx("categories", "تصنيف")}"); TvSearchInput(tx("Search", "بحث") + " ${if (category == "All") tx("movies", "في الأفلام") else category}", query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Movies" && all.isEmpty()) { LoadingBox(tx("Loading movies…", "جاري تحميل الأفلام…")); return }
     BoxWithConstraints(Modifier.fillMaxSize()) { val showDetails = maxWidth >= 880.dp && mode == DisplayMode.LIST; val categoryWidth = if (maxWidth < 850.dp) 150.dp else 185.dp; Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { LazyColumn(Modifier.width(categoryWidth), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(listOf("All") + categories) { c -> val count = if (c == "All") all.size else all.count { it.category == c }; TvNavItem("${if (c == "All") tx("All", "الكل") else c} ($count)", category == c) { category = c; selected = null } } }; if (mode == DisplayMode.GRID) { LazyVerticalGrid(columns = GridCells.Adaptive(145.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) { gridItems(filtered, key = { it.id }) { movie -> MediaGridCard(movie.name, movie.poster, movie.year, progress["movie:${movie.id}"]?.fraction, { selected = movie }) { onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) } } } } else { LazyColumn(Modifier.weight(if (showDetails) 1.12f else 1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(filtered, key = { it.id }) { movie -> TvListItem(movie.name, listOfNotNull(movie.year, movie.category).filter { it.isNotBlank() }.joinToString(" • "), progress = progress["movie:${movie.id}"]?.fraction, onFocus = { selected = movie }) { onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) } } }; if (showDetails) MediaDetails(Modifier.weight(.88f), selected?.name, selected?.poster, selected?.plot, selected?.rating, selected?.let { progress["movie:${it.id}"]?.fraction }) { selected?.let { movie -> onPlay(PlayRequest("movie", movie.id, movie.name, movie.streamUrl)) } } } } }
 }
 
@@ -430,7 +470,7 @@ private fun MainShell(vm: AppViewModel, updateStatus: UpdateStatus, onCheckUpdat
         return
     }
 
-    Heading(tx("Series", "المسلسلات"), if (all.isEmpty()) tx("Xtream series", "مسلسلات Xtream") else "${all.size} ${tx("series", "مسلسل")} • ${categories.size} ${tx("categories", "تصنيف")}"); TvInput(tx("Search series", "بحث في المسلسلات"), query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Series" && all.isEmpty()) { LoadingBox(tx("Loading series…", "جاري تحميل المسلسلات…")); return }
+    Heading(tx("Series", "المسلسلات"), if (all.isEmpty()) tx("Xtream series", "مسلسلات Xtream") else "${all.size} ${tx("series", "مسلسل")} • ${categories.size} ${tx("categories", "تصنيف")}"); TvSearchInput(tx("Search series", "بحث في المسلسلات"), query) { query = it }; Spacer(Modifier.height(12.dp)); if (loading == "Series" && all.isEmpty()) { LoadingBox(tx("Loading series…", "جاري تحميل المسلسلات…")); return }
     BoxWithConstraints(Modifier.fillMaxSize()) { val showEpisodes = maxWidth >= 880.dp && mode == DisplayMode.LIST; val categoryWidth = if (maxWidth < 850.dp) 150.dp else 185.dp; Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) { LazyColumn(Modifier.width(categoryWidth), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(listOf("All") + categories) { c -> val count = if (c == "All") all.size else all.count { it.category == c }; TvNavItem("${if (c == "All") tx("All", "الكل") else c} ($count)", category == c) { category = c; selected = null; vm.clearSeriesDetails() } } }; if (mode == DisplayMode.GRID) { LazyVerticalGrid(columns = GridCells.Adaptive(145.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 18.dp), horizontalArrangement = Arrangement.spacedBy(9.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) { gridItems(filtered, key = { it.id }) { item -> MediaGridCard(item.name, item.poster, item.year, onFocus = { selected = item }) { selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) } } } } else { LazyColumn(Modifier.weight(if (showEpisodes) 1.05f else 1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(filtered, key = { it.id }) { item -> TvListItem(item.name, item.category, onFocus = { selected = item }) { selected = item; openedSeriesId = item.id; vm.loadSeriesDetails(item) } } }; if (showEpisodes) { Column(Modifier.weight(.95f).fillMaxHeight().clip(RoundedCornerShape(16.dp)).background(Panel).padding(16.dp)) { val current = selected; if (current == null) { Text(tx("Select a series", "اختر مسلسلًا"), color = Muted); return@Column }; Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) { AsyncImage(current.poster, null, Modifier.width(82.dp).height(116.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFF19232D)), contentScale = ContentScale.Crop); Column(Modifier.weight(1f)) { Text(current.name, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2); Text(listOfNotNull(current.year, current.category).filter { it.isNotBlank() }.joinToString(" • "), color = Accent, fontSize = 12.sp, maxLines = 1); if (!current.plot.isNullOrBlank()) { Spacer(Modifier.height(5.dp)); Text(current.plot.orEmpty(), color = Muted, fontSize = 12.sp, maxLines = 3) } } }; Spacer(Modifier.height(9.dp)); TvButton(tx("LOAD EPISODES", "تحميل الحلقات"), true, modifier = Modifier.fillMaxWidth()) { vm.loadSeriesDetails(current) }; Spacer(Modifier.height(9.dp)); if (loading == "Episodes") Text(tx("Loading episodes…", "جاري تحميل الحلقات…"), color = Accent); val episodes = details?.takeIf { it.series.id == current.id }?.episodes.orEmpty(); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(episodes, key = { it.id }) { ep -> TvListItem("S${ep.season} E${ep.episode}  ${ep.title}", ep.duration.orEmpty(), progress = progress["episode:${ep.id}"]?.fraction) { onPlay(PlayRequest("episode", ep.id, ep.title, ep.streamUrl)) } } } } } } } }
 }
 
@@ -829,6 +869,115 @@ private fun TvButton(label: String, selected: Boolean = false, enabled: Boolean 
     ) {
         Text(label, color = if (focused) Color(0xFF061014) else if (enabled) Color.White else Color.DarkGray, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
     }
+}
+
+@Composable
+private fun ResumePlaybackDialog(
+    title: String,
+    positionMs: Long,
+    durationMs: Long,
+    onDismiss: () -> Unit,
+    onResume: () -> Unit,
+    onRestart: () -> Unit
+) {
+    val fraction = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.widthIn(min = 430.dp, max = 620.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFF0C151D))
+                .border(1.dp, Color(0xFF28423F), RoundedCornerShape(22.dp)).padding(24.dp)
+        ) {
+            Text(tx("Continue watching?", "متابعة المشاهدة؟"), color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(7.dp))
+            Text(title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+            Spacer(Modifier.height(12.dp))
+            Text(
+                tx("You stopped at", "توقفت عند") + " ${formatResumeTime(positionMs)}  •  ${(fraction * 100).toInt()}%",
+                color = Muted, fontSize = 13.sp
+            )
+            Spacer(Modifier.height(9.dp))
+            Box(Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(99.dp)).background(Color.White.copy(alpha = .10f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).background(Accent))
+            }
+            Spacer(Modifier.height(20.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                TvButton(tx("CONTINUE", "متابعة") + "  ${formatResumeTime(positionMs)}", true, modifier = Modifier.weight(1f), onClick = onResume)
+                TvButton(tx("START OVER", "من البداية"), modifier = Modifier.weight(.72f), onClick = onRestart)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvSearchInput(label: String, value: String, onValueChange: (String) -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().height(47.dp).clip(RoundedCornerShape(12.dp))
+            .background(if (focused) Focus else Panel)
+            .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color(0xFF263746), RoundedCornerShape(12.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .clickable { editing = true }
+            .focusable()
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("⌕", color = if (focused) Accent else Muted, fontSize = 20.sp)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (value.isBlank()) label else value,
+            color = if (value.isBlank()) Muted else Color.White,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
+            maxLines = 1
+        )
+        Text(tx("OK to search", "اضغط للبحث"), color = if (focused) Accent else Color(0xFF687988), fontSize = 10.sp)
+    }
+    if (editing) {
+        TvSearchDialog(label, value, onValueChange) { editing = false }
+    }
+}
+
+@Composable
+private fun TvSearchDialog(label: String, value: String, onValueChange: (String) -> Unit, onDismiss: () -> Unit) {
+    val focusRequester = remember { FocusRequester() }
+    var fieldFocused by remember { mutableStateOf(false) }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.widthIn(min = 500.dp, max = 760.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFF0C151D))
+                .border(1.dp, Color(0xFF28423F), RoundedCornerShape(22.dp)).padding(24.dp)
+        ) {
+            Text(label, color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = TextStyle(color = Color.White, fontSize = 18.sp),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(13.dp)).background(Panel)
+                    .border(if (fieldFocused) 2.dp else 1.dp, if (fieldFocused) Accent else Color(0xFF263746), RoundedCornerShape(13.dp))
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { fieldFocused = it.isFocused }
+                    .padding(horizontal = 16.dp, vertical = 15.dp)
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                TvButton(tx("DONE", "تم"), true) { onDismiss() }
+                if (value.isNotBlank()) TvButton(tx("CLEAR", "مسح")) { onValueChange("") }
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(120)
+        focusRequester.requestFocus()
+    }
+}
+
+private fun formatResumeTime(ms: Long): String {
+    val total = ms.coerceAtLeast(0L) / 1000L
+    val hours = total / 3600L
+    val minutes = (total % 3600L) / 60L
+    val seconds = total % 60L
+    return if (hours > 0L) "%d:%02d:%02d".format(hours, minutes, seconds) else "%02d:%02d".format(minutes, seconds)
 }
 
 @Composable

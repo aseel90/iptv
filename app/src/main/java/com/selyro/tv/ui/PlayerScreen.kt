@@ -178,8 +178,12 @@ fun PlayerScreen(
         if (isLive) return
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastPersistAt < 5_000L) return
+        val playerDuration = normalizedDuration(player)
+        val snapshotDuration = if (playerDuration > 0L) playerDuration else duration
+        if (snapshotDuration <= 0L) return
+        val snapshotPosition = if (playerDuration > 0L) max(0L, player.currentPosition) else position.coerceAtLeast(0L)
         lastPersistAt = now
-        onProgress(max(0L, player.currentPosition), normalizedDuration(player))
+        onProgress(snapshotPosition.coerceAtMost(snapshotDuration), snapshotDuration)
     }
 
     fun seekBy(deltaMs: Long) {

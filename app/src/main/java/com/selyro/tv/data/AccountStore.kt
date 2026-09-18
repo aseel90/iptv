@@ -372,9 +372,13 @@ class AccountStore(context: Context) {
         val prefKey = progressKey(accountId)
         val safePosition = positionMs.coerceAtLeast(0L)
         val safeDuration = durationMs.coerceAtLeast(0L)
+        // A player can briefly report TIME_UNSET/0 after stop or during teardown. Never let
+        // that transient state erase a valid resume point that was already persisted.
+        if (safeDuration <= 0L) return
+
         val root = runCatching { JSONObject(prefs.getString(prefKey, "{}") ?: "{}") }.getOrDefault(JSONObject())
-        val completed = safeDuration > 0L && (safePosition >= safeDuration - 60_000L || safePosition.toDouble() / safeDuration >= 0.95)
-        if (safeDuration <= 0L || safePosition < 10_000L || completed) {
+        val completed = safePosition >= safeDuration - 60_000L || safePosition.toDouble() / safeDuration >= 0.95
+        if (safePosition < 10_000L || completed) {
             root.remove(key)
         } else {
             root.put(key, JSONObject().apply {
