@@ -44,6 +44,7 @@ jobs:
         run: |
           set -euxo pipefail
           python .ci/apply_041.py
+          sed -i '/import kotlinx.coroutines.launch/i import kotlinx.coroutines.delay' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
 
       - name: Verify 0.4.1 contract
         run: |
@@ -55,11 +56,13 @@ jobs:
           grep -q 'ResumePlaybackDialog' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
           grep -q 'TvSearchInput' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
           grep -q 'OK to search' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
+          grep -q 'import kotlinx.coroutines.delay' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
           ! grep -q 'TvInput(tx("Search channels"' app/src/main/java/com/selyro/tv/ui/SelyroApp.kt
           git diff --exit-code origin/release/0.4.0-account-foundation -- app/src/main/java/com/selyro/tv/player/PlayerFactory.kt app/src/main/java/com/selyro/tv/player/StreamingProfile.kt app/src/main/java/com/selyro/tv/iptv app/src/main/java/com/selyro/tv/update app/src/main/AndroidManifest.xml
 
       - name: Test lint and build
         run: |
+          set +e
           set -o pipefail
           mkdir -p ci-status
           gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace 2>&1 | tee ci-status/041-gradle.log
